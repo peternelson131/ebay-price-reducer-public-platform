@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>eBay OAuth - Processing...</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    .container {
+      background: white;
+      padding: 2rem;
+      border-radius: 8px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      text-align: center;
+      max-width: 400px;
+    }
+    .spinner {
+      width: 50px;
+      height: 50px;
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #667eea;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 1rem;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .success {
+      color: #10b981;
+      font-size: 3rem;
+      margin-bottom: 1rem;
+    }
+    .error {
+      color: #ef4444;
+      font-size: 3rem;
+      margin-bottom: 1rem;
+    }
+    h2 {
+      color: #1f2937;
+      margin: 0 0 0.5rem;
+    }
+    p {
+      color: #6b7280;
+      margin: 0;
+    }
+    .error-text {
+      color: #ef4444;
+      margin-top: 1rem;
+      font-size: 0.875rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container" id="container">
+    <div class="spinner"></div>
+    <h2>Connecting to eBay...</h2>
+    <p>Please wait while we complete your connection.</p>
+  </div>
+
+  <script>
+    // Parse URL parameters
+    const params = new URLSearchParams(window.location.search);
+    const success = params.get('success');
+    const error = params.get('error');
+    const message = params.get('message');
+    const ebayUser = params.get('ebay_user');
+
+    function showSuccess() {
+      document.getElementById('container').innerHTML = `
+        <div class="success">✓</div>
+        <h2>Successfully Connected!</h2>
+        <p>${ebayUser ? `Connected as: ${ebayUser}` : 'Your eBay account is now linked.'}</p>
+        <p style="margin-top: 1rem; font-size: 0.875rem;">This window will close automatically...</p>
+      `;
+
+      // Send success message to parent window
+      if (window.opener) {
+        window.opener.postMessage({
+          type: 'ebay-oauth-success',
+          ebayUser: ebayUser
+        }, '*');
+      }
+
+      // Close window after 2 seconds
+      setTimeout(() => {
+        window.close();
+      }, 2000);
+    }
+
+    function showError(errorMessage) {
+      document.getElementById('container').innerHTML = `
+        <div class="error">✗</div>
+        <h2>Connection Failed</h2>
+        <p>We couldn't connect to your eBay account.</p>
+        <p class="error-text">${errorMessage || 'Please try again.'}</p>
+        <p style="margin-top: 1rem; font-size: 0.875rem;">You can close this window.</p>
+      `;
+
+      // Send error message to parent window
+      if (window.opener) {
+        window.opener.postMessage({
+          type: 'ebay-oauth-error',
+          error: errorMessage
+        }, '*');
+      }
+
+      // Close window after 5 seconds
+      setTimeout(() => {
+        window.close();
+      }, 5000);
+    }
+
+    // Handle the response
+    if (success === 'true') {
+      showSuccess();
+    } else if (error) {
+      showError(message || error);
+    } else {
+      // If no parameters, something went wrong
+      showError('Invalid callback parameters');
+    }
+  </script>
+</body>
+</html>

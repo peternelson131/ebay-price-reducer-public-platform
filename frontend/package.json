@@ -1,0 +1,47 @@
+{
+  "name": "ebay-price-reducer-frontend",
+  "version": "1.0.0",
+  "description": "Frontend React app for eBay price reduction management",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
+    "preview": "vite preview",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@headlessui/react": "^1.7.17",
+    "@heroicons/react": "^2.0.18",
+    "@supabase/supabase-js": "^2.38.0",
+    "@tanstack/react-query": "^4.32.0",
+    "@tanstack/react-virtual": "^3.13.12",
+    "autoprefixer": "^10.4.15",
+    "date-fns": "^2.30.0",
+    "lodash": "^4.17.21",
+    "postcss": "^8.4.29",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-dropzone": "^14.3.8",
+    "react-hook-form": "^7.45.4",
+    "react-router-dom": "^6.15.0",
+    "react-toastify": "^9.1.3",
+    "tailwindcss": "^3.3.3",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.1.4",
+    "@testing-library/react": "^13.4.0",
+    "@testing-library/user-event": "^14.5.1",
+    "@types/react": "^18.2.15",
+    "@types/react-dom": "^18.2.7",
+    "@vitejs/plugin-react": "^4.0.3",
+    "eslint": "^8.45.0",
+    "eslint-plugin-react": "^7.32.2",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-refresh": "^0.4.3",
+    "jsdom": "^22.1.0",
+    "vite": "^4.5.14",
+    "vitest": "^0.34.4"
+  }
+}

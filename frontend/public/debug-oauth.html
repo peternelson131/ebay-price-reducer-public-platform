@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>eBay OAuth Debug Tool</title>
+    <style>
+        body {
+            font-family: monospace;
+            max-width: 1400px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        .section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 2px solid #333;
+            background: #f9f9f9;
+        }
+        h2 {
+            margin-top: 0;
+            color: #333;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            cursor: pointer;
+            margin: 5px;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        #results {
+            background: #000;
+            color: #0f0;
+            padding: 15px;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-size: 12px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .error {
+            color: #f00;
+        }
+        .success {
+            color: #0f0;
+        }
+        .warning {
+            color: #ff0;
+        }
+        .info {
+            color: #0ff;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔧 eBay OAuth Debug Tool</h1>
+
+    <div class="section">
+        <h2>Step 1: Get Authorization Code</h2>
+        <input type="text" id="clientId" placeholder="eBay App ID (Client ID)" />
+        <input type="text" id="redirectUri" placeholder="Redirect URI"
+               value="https://dainty-horse-49c336.netlify.app/.netlify/functions/ebay-oauth" />
+        <button onclick="generateAuthUrl()">Generate Auth URL</button>
+        <div id="authUrlDisplay" style="margin-top: 15px;"></div>
+    </div>
+
+    <div class="section">
+        <h2>Step 2: Test Token Exchange</h2>
+        <textarea id="authCode" rows="3" placeholder="Paste authorization code here"></textarea>
+        <input type="password" id="clientSecret" placeholder="eBay Cert ID (Client Secret)" />
+        <button onclick="testTokenExchange()">Test Token Exchange</button>
+    </div>
+
+    <div class="section">
+        <h2>Step 3: Test API with Access Token</h2>
+        <textarea id="accessToken" rows="3" placeholder="Paste access token here (from step 2 results)"></textarea>
+        <button onclick="testApiWithToken()">Test eBay APIs</button>
+    </div>
+
+    <div class="section">
+        <h2>Step 4: Check Stored Tokens</h2>
+        <input type="text" id="userId" placeholder="User ID (from Supabase)" />
+        <button onclick="checkStoredTokens()">Check Stored Tokens</button>
+    </div>
+
+    <div class="section">
+        <h2>📊 Debug Results:</h2>
+        <div id="results">Waiting for tests...</div>
+    </div>
+
+    <script>
+        let lastAccessToken = null;
+        let lastRefreshToken = null;
+
+        function log(message, type = 'info') {
+            const resultsDiv = document.getElementById('results');
+            const timestamp = new Date().toLocaleTimeString();
+            const typeClass = type;
+            resultsDiv.innerHTML += `<span class="${typeClass}">[${timestamp}] ${message}</span>\n`;
+            resultsDiv.scrollTop = resultsDiv.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('results').innerHTML = '';
+        }
+
+        function generateAuthUrl() {
+            clearLog();
+            const clientId = document.getElementById('clientId').value;
+            const redirectUri = document.getElementById('redirectUri').value;
+
+            if (!clientId) {
+                log('ERROR: Please enter Client ID', 'error');
+                return;
+            }
+
+            log('Generating authorization URL...', 'info');
+
+            const scopes = [
+                'https://api.ebay.com/oauth/api_scope',
+                'https://api.ebay.com/oauth/api_scope/sell.inventory',
+                'https://api.ebay.com/oauth/api_scope/sell.inventory.readonly',
+                'https://api.ebay.com/oauth/api_scope/sell.account.readonly',
+                'https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly'
+            ];
+
+            const scope = scopes.join(' ');
+            const state = 'debug_' + Date.now();
+
+            const authUrl = 'https://auth.ebay.com/oauth2/authorize?' +
+                'client_id=' + encodeURIComponent(clientId) +
+                '&response_type=code' +
+                '&redirect_uri=' + encodeURIComponent(redirectUri) +
+                '&scope=' + encodeURIComponent(scope) +
+                '&state=' + state;
+
+            document.getElementById('authUrlDisplay').innerHTML =
+                `<strong>Authorization URL:</strong><br>
+                <a href="${authUrl}" target="_blank">${authUrl}</a><br><br>
+                <button onclick="window.open('${authUrl}', '_blank')">Open in New Window</button>`;
+
+            log('✅ Authorization URL generated', 'success');
+            log('Scopes requested:', 'info');
+            scopes.forEach(s => log('  - ' + s, 'info'));
+        }
+
+        async function testTokenExchange() {
+            clearLog();
+            const code = document.getElementById('authCode').value;
+            const clientId = document.getElementById('clientId').value;
+            const clientSecret = document.getElementById('clientSecret').value;
+            const redirectUri = document.getElementById('redirectUri').value;
+
+            if (!code || !clientId || !clientSecret) {
+                log('ERROR: Missing required fields', 'error');
+                return;
+            }
+
+            log('Testing token exchange...', 'info');
+            log('Code length: ' + code.length, 'info');
+
+            try {
+                // Use relative URL when on same domain
+                const baseUrl = window.location.hostname === 'localhost'
+                    ? 'https://dainty-horse-49c336.netlify.app'
+                    : '';
+
+                const response = await fetch(baseUrl + '/.netlify/functions/debug-ebay-oauth', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        action: 'test-token-exchange',
+                        code: code.trim(),
+                        client_id: clientId.trim(),
+                        client_secret: clientSecret.trim(),
+                        redirect_uri: redirectUri.trim()
+                    })
+                });
+
+                const result = await response.json();
+
+                log('=== TOKEN EXCHANGE RESULT ===', 'warning');
+                log('Status: ' + result.status + ' ' + result.statusText, result.success ? 'success' : 'error');
+
+                if (result.analysis) {
+                    log('\n=== ANALYSIS ===', 'warning');
+                    log('Has Access Token: ' + (result.analysis.has_access_token ? '✅ YES' : '❌ NO'),
+                        result.analysis.has_access_token ? 'success' : 'error');
+                    log('Has Refresh Token: ' + (result.analysis.has_refresh_token ? '✅ YES' : '❌ NO'),
+                        result.analysis.has_refresh_token ? 'success' : 'error');
+
+                    if (result.analysis.error) {
+                        log('Error: ' + result.analysis.error, 'error');
+                        log('Error Description: ' + result.analysis.error_description, 'error');
+                    }
+                }
+
+                if (result.data) {
+                    log('\n=== RESPONSE DATA ===', 'warning');
+                    log(JSON.stringify(result.data, null, 2), 'info');
+
+                    if (result.data.access_token) {
+                        lastAccessToken = result.data.access_token;
+                        document.getElementById('accessToken').value = lastAccessToken;
+                        log('\n✅ Access token received and auto-filled in Step 3', 'success');
+                    }
+
+                    if (result.data.refresh_token) {
+                        lastRefreshToken = result.data.refresh_token;
+                        log('✅ REFRESH TOKEN RECEIVED!', 'success');
+                    } else {
+                        log('⚠️ NO REFRESH TOKEN IN RESPONSE', 'error');
+                    }
+                }
+
+                if (result.rawResponse) {
+                    log('\n=== RAW RESPONSE ===', 'warning');
+                    log(result.rawResponse, 'info');
+                }
+
+            } catch (error) {
+                log('ERROR: ' + error.message, 'error');
+                log('This might be a CORS issue. Make sure you are using the hosted version.', 'warning');
+            }
+        }
+
+        async function testApiWithToken() {
+            clearLog();
+            const accessToken = document.getElementById('accessToken').value;
+
+            if (!accessToken) {
+                log('ERROR: Please provide access token', 'error');
+                return;
+            }
+
+            log('Testing eBay APIs with access token...', 'info');
+            log('Token length: ' + accessToken.length, 'info');
+            log('Token prefix: ' + accessToken.substring(0, 20) + '...', 'info');
+
+            try {
+                const baseUrl = window.location.hostname === 'localhost'
+                    ? 'https://dainty-horse-49c336.netlify.app'
+                    : '';
+
+                const response = await fetch(baseUrl + '/.netlify/functions/debug-ebay-oauth', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        action: 'test-api-with-token',
+                        access_token: accessToken.trim()
+                    })
+                });
+
+                const result = await response.json();
+
+                log('\n=== API TEST RESULTS ===', 'warning');
+
+                if (result.test_results) {
+                    result.test_results.forEach(test => {
+                        log('\n--- Endpoint: ' + test.endpoint + ' ---', 'info');
+                        log('Status: ' + test.status + ' ' + test.statusText,
+                            test.success ? 'success' : 'error');
+
+                        if (test.data) {
+                            log('Response:', 'info');
+                            log(JSON.stringify(test.data, null, 2), 'info');
+                        }
+
+                        if (test.error) {
+                            log('Error: ' + test.error, 'error');
+                        }
+                    });
+                }
+
+            } catch (error) {
+                log('ERROR: ' + error.message, 'error');
+            }
+        }
+
+        async function checkStoredTokens() {
+            clearLog();
+            const userId = document.getElementById('userId').value;
+
+            if (!userId) {
+                log('ERROR: Please provide user ID', 'error');
+                return;
+            }
+
+            log('Checking stored tokens for user: ' + userId, 'info');
+
+            try {
+                const baseUrl = window.location.hostname === 'localhost'
+                    ? 'https://dainty-horse-49c336.netlify.app'
+                    : '';
+
+                const response = await fetch(baseUrl + '/.netlify/functions/debug-ebay-oauth', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        action: 'get-stored-tokens',
+                        user_id: userId
+                    })
+                });
+
+                const result = await response.json();
+
+                log('\n=== STORED TOKENS ===', 'warning');
+                log(JSON.stringify(result, null, 2), 'info');
+
+                if (result.has_refresh_token) {
+                    log('\n✅ Refresh token is stored in database', 'success');
+                } else {
+                    log('\n❌ No refresh token in database', 'error');
+                }
+
+            } catch (error) {
+                log('ERROR: ' + error.message, 'error');
+            }
+        }
+
+        // Auto-clear log on page load
+        clearLog();
+        log('eBay OAuth Debug Tool Ready', 'success');
+        log('Follow the steps above to debug your OAuth flow', 'info');
+        log('Note: This tool must be accessed from the hosted URL to avoid CORS issues', 'warning');
+    </script>
+</body>
+</html>

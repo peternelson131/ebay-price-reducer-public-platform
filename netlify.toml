@@ -1,0 +1,27 @@
+[build]
+  publish = "frontend/dist"
+  command = "npm install && cd netlify/functions && npm install && cd ../../frontend && npm install --include=dev && npm run build"
+
+[functions]
+  directory = "netlify/functions"
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://*.supabase.co https://api.ebay.com https://api.sandbox.ebay.com; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; frame-ancestors 'none';"
+
+# Scheduled function to refresh popular category aspects daily
+# Configured in Netlify UI: scheduled-aspect-refresh runs daily at 2 AM UTC

@@ -1,0 +1,18 @@
+{
+  "name": "ebay-price-reducer-functions",
+  "version": "1.0.0",
+  "description": "Netlify Functions for eBay Price Reducer",
+  "main": "index.js",
+  "dependencies": {
+    "@netlify/functions": "^2.0.0",
+    "@supabase/supabase-js": "^2.58.0",
+    "apollo-server-lambda": "^3.13.0",
+    "axios": "^1.12.2",
+    "dataloader": "^2.2.3",
+    "dotenv": "^17.2.2",
+    "graphql": "^16.11.0",
+    "graphql-depth-limit": "^1.1.0",
+    "graphql-query-complexity": "^1.1.0",
+    "xml2js": "^0.6.2"
+  }
+}

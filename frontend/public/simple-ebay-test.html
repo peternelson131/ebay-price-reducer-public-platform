@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple eBay Token Test</title>
+    <style>
+        body {
+            font-family: monospace;
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f0f0f0;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            font-family: monospace;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            padding: 12px 25px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        #output {
+            background: #1e1e1e;
+            color: #00ff00;
+            padding: 20px;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-size: 12px;
+            max-height: 600px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+        .error { color: #ff6b6b; }
+        .success { color: #51cf66; }
+        .info { color: #74c0fc; }
+        h2 { color: #333; margin-top: 30px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔬 Simple eBay Token Exchange Test</h1>
+        <p>This tool tests the eBay token exchange directly without any server-side code.</p>
+
+        <h2>Step 1: Generate Authorization URL</h2>
+        <input type="text" id="appId" placeholder="eBay App ID (Client ID)" />
+        <button onclick="generateUrl()">Generate Authorization URL</button>
+        <div id="authUrl"></div>
+
+        <h2>Step 2: Manual Token Exchange Test</h2>
+        <input type="text" id="authCode" placeholder="Authorization Code (from callback URL)" />
+        <input type="password" id="certId" placeholder="eBay Cert ID (Client Secret)" />
+        <input type="text" id="redirectUri" value="https://dainty-horse-49c336.netlify.app/.netlify/functions/ebay-oauth" />
+        <button onclick="testTokenExchange()">Test Token Exchange</button>
+
+        <h2>Output:</h2>
+        <div id="output">Ready to test...</div>
+    </div>
+
+    <script>
+        function log(message, type = 'info') {
+            const output = document.getElementById('output');
+            const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
+            output.innerHTML += `<span class="${type}">[${timestamp}] ${message}</span>\n`;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function clear() {
+            document.getElementById('output').innerHTML = '';
+        }
+
+        function generateUrl() {
+            clear();
+            const appId = document.getElementById('appId').value;
+            if (!appId) {
+                log('Please enter App ID', 'error');
+                return;
+            }
+
+            const redirectUri = document.getElementById('redirectUri').value;
+            const scopes = [
+                'https://api.ebay.com/oauth/api_scope',
+                'https://api.ebay.com/oauth/api_scope/sell.inventory',
+                'https://api.ebay.com/oauth/api_scope/sell.inventory.readonly'
+            ].join(' ');
+
+            const authUrl = 'https://auth.ebay.com/oauth2/authorize?' +
+                'client_id=' + encodeURIComponent(appId) +
+                '&response_type=code' +
+                '&redirect_uri=' + encodeURIComponent(redirectUri) +
+                '&scope=' + encodeURIComponent(scopes) +
+                '&state=test_' + Date.now();
+
+            document.getElementById('authUrl').innerHTML =
+                `<div style="margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 5px;">
+                    <strong>Authorization URL:</strong><br>
+                    <a href="${authUrl}" target="_blank" style="word-break: break-all;">${authUrl}</a><br><br>
+                    <button onclick="window.open('${authUrl}', '_blank')">Open in New Window</button>
+                </div>`;
+
+            log('Authorization URL generated', 'success');
+        }
+
+        async function testTokenExchange() {
+            clear();
+            const code = document.getElementById('authCode').value;
+            const appId = document.getElementById('appId').value;
+            const certId = document.getElementById('certId').value;
+            const redirectUri = document.getElementById('redirectUri').value;
+
+            if (!code || !appId || !certId) {
+                log('Missing required fields', 'error');
+                return;
+            }
+
+            log('Starting token exchange test...', 'info');
+            log('Code length: ' + code.length, 'info');
+
+            // Test 1: URL Decoding
+            const decodedCode = decodeURIComponent(code);
+            log('Code needs decoding: ' + (code !== decodedCode), 'info');
+
+            // Create auth header
+            const auth = btoa(appId + ':' + certId);
+            log('Auth header created', 'info');
+
+            // Prepare request
+            const params = new URLSearchParams({
+                grant_type: 'authorization_code',
+                code: decodedCode,
+                redirect_uri: redirectUri
+            });
+
+            log('Request params:', 'info');
+            log('  grant_type: authorization_code', 'info');
+            log('  code: ' + decodedCode.substring(0, 20) + '...', 'info');
+            log('  redirect_uri: ' + redirectUri, 'info');
+
+            try {
+                // We need to use a proxy or server endpoint due to CORS
+                log('\n=== IMPORTANT ===', 'error');
+                log('Direct browser-to-eBay calls are blocked by CORS.', 'error');
+                log('The token exchange MUST be done server-side.', 'error');
+                log('\nHere\'s what the server should send:', 'info');
+                log('\nPOST https://api.ebay.com/identity/v1/oauth2/token', 'info');
+                log('Headers:', 'info');
+                log('  Content-Type: application/x-www-form-urlencoded', 'info');
+                log('  Authorization: Basic ' + auth.substring(0, 20) + '...', 'info');
+                log('\nBody:', 'info');
+                log(params.toString(), 'info');
+
+                // Try using our debug endpoint
+                log('\n=== Testing via Debug Endpoint ===', 'success');
+                const response = await fetch('/.netlify/functions/debug-ebay-oauth', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        action: 'test-token-exchange',
+                        code: code,
+                        client_id: appId,
+                        client_secret: certId,
+                        redirect_uri: redirectUri
+                    })
+                });
+
+                const result = await response.json();
+
+                log('\n=== RESPONSE ===', 'success');
+                log(JSON.stringify(result, null, 2), result.success ? 'success' : 'error');
+
+                if (result.data && result.data.refresh_token) {
+                    log('\n✅ REFRESH TOKEN RECEIVED!', 'success');
+                    log('Length: ' + result.data.refresh_token.length, 'success');
+                } else {
+                    log('\n❌ NO REFRESH TOKEN IN RESPONSE', 'error');
+                }
+
+            } catch (error) {
+                log('\nError: ' + error.message, 'error');
+                log('Stack: ' + error.stack, 'error');
+            }
+        }
+
+        // Initialize
+        clear();
+        log('Simple eBay Token Test Ready', 'success');
+        log('This tool helps debug the token exchange process', 'info');
+    </script>
+</body>
+</html>

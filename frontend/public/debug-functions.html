@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug Netlify Functions</title>
+    <style>
+        body {
+            font-family: monospace;
+            max-width: 1000px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .test {
+            border: 1px solid #ddd;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        button {
+            padding: 10px 20px;
+            background: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background: #0056b3; }
+        .result {
+            background: #f5f5f5;
+            padding: 10px;
+            margin-top: 10px;
+            white-space: pre-wrap;
+            border-radius: 3px;
+        }
+        .error { color: red; }
+        .success { color: green; }
+    </style>
+</head>
+<body>
+    <h1>Debug Netlify Functions</h1>
+
+    <div class="test">
+        <h2>Test 1: Simple Test Function</h2>
+        <button onclick="testSimpleFunction()">Test Simple Function</button>
+        <div id="test1Result" class="result"></div>
+    </div>
+
+    <div class="test">
+        <h2>Test 2: eBay OAuth - No Auth</h2>
+        <button onclick="testEbayOAuthNoAuth()">Test eBay OAuth (No Auth)</button>
+        <div id="test2Result" class="result"></div>
+    </div>
+
+    <div class="test">
+        <h2>Test 3: eBay OAuth - With Auth</h2>
+        <input type="text" id="authToken" placeholder="Enter auth token" style="width: 400px; padding: 5px;">
+        <button onclick="testEbayOAuthWithAuth()">Test eBay OAuth (With Auth)</button>
+        <div id="test3Result" class="result"></div>
+    </div>
+
+    <div class="test">
+        <h2>Test 4: Save Credentials Function</h2>
+        <input type="text" id="authToken2" placeholder="Enter auth token" style="width: 400px; padding: 5px;">
+        <button onclick="testSaveCredentials()">Test Save Credentials</button>
+        <div id="test4Result" class="result"></div>
+    </div>
+
+    <script>
+        async function testSimpleFunction() {
+            const result = document.getElementById('test1Result');
+            result.innerHTML = 'Testing...';
+
+            try {
+                const response = await fetch('/.netlify/functions/test-function?test=1');
+                const status = response.status;
+                const text = await response.text();
+
+                if (status === 200) {
+                    result.innerHTML = `<span class="success">✓ Success (${status})</span>\n${text}`;
+                } else {
+                    result.innerHTML = `<span class="error">✗ Error (${status})</span>\n${text}`;
+                }
+            } catch (error) {
+                result.innerHTML = `<span class="error">✗ Network Error</span>\n${error.message}`;
+            }
+        }
+
+        async function testEbayOAuthNoAuth() {
+            const result = document.getElementById('test2Result');
+            result.innerHTML = 'Testing...';
+
+            try {
+                const response = await fetch('/.netlify/functions/ebay-oauth?action=test');
+                const status = response.status;
+                const text = await response.text();
+
+                result.innerHTML = `Status: ${status}\nResponse: ${text}`;
+
+                if (status === 401) {
+                    result.innerHTML += '\n\n<span class="success">✓ Correctly requires authentication</span>';
+                } else if (status === 502) {
+                    result.innerHTML += '\n\n<span class="error">✗ Function crashed (502)</span>';
+                }
+            } catch (error) {
+                result.innerHTML = `<span class="error">✗ Network Error</span>\n${error.message}`;
+            }
+        }
+
+        async function testEbayOAuthWithAuth() {
+            const result = document.getElementById('test3Result');
+            const token = document.getElementById('authToken').value;
+
+            if (!token) {
+                result.innerHTML = '<span class="error">Please enter an auth token</span>';
+                return;
+            }
+
+            result.innerHTML = 'Testing...';
+
+            try {
+                const response = await fetch('/.netlify/functions/ebay-oauth?action=get-credentials', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                const status = response.status;
+                const text = await response.text();
+
+                result.innerHTML = `Status: ${status}\nResponse: ${text}`;
+
+                if (status === 200) {
+                    result.innerHTML += '\n\n<span class="success">✓ Function working</span>';
+                } else if (status === 502) {
+                    result.innerHTML += '\n\n<span class="error">✗ Function crashed (502)</span>';
+                }
+            } catch (error) {
+                result.innerHTML = `<span class="error">✗ Network Error</span>\n${error.message}`;
+            }
+        }
+
+        async function testSaveCredentials() {
+            const result = document.getElementById('test4Result');
+            const token = document.getElementById('authToken2').value;
+
+            if (!token) {
+                result.innerHTML = '<span class="error">Please enter an auth token</span>';
+                return;
+            }
+
+            result.innerHTML = 'Testing...';
+
+            try {
+                const response = await fetch('/.netlify/functions/save-ebay-credentials', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        app_id: 'test',
+                        cert_id: 'test',
+                        dev_id: 'test'
+                    })
+                });
+                const status = response.status;
+                const text = await response.text();
+
+                result.innerHTML = `Status: ${status}\nResponse: ${text}`;
+
+                if (status === 200) {
+                    result.innerHTML += '\n\n<span class="success">✓ Function working</span>';
+                } else if (status === 502) {
+                    result.innerHTML += '\n\n<span class="error">✗ Function crashed (502)</span>';
+                }
+            } catch (error) {
+                result.innerHTML = `<span class="error">✗ Network Error</span>\n${error.message}`;
+            }
+        }
+    </script>
+</body>
+</html>

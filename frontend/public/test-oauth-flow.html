@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>eBay OAuth Flow Test</title>
+    <style>
+        body {
+            font-family: monospace;
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f0f0f0;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            font-family: monospace;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            padding: 12px 25px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        #output {
+            background: #1e1e1e;
+            color: #00ff00;
+            padding: 20px;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-size: 12px;
+            max-height: 600px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+        .error { color: #ff6b6b; }
+        .success { color: #51cf66; }
+        .info { color: #74c0fc; }
+        .warning { color: #ffd93d; }
+        h2 { color: #333; margin-top: 30px; }
+        .step {
+            border: 2px solid #ddd;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+        .step.active {
+            border-color: #007bff;
+            background: #f0f8ff;
+        }
+        .step.complete {
+            border-color: #28a745;
+            background: #f0fff4;
+        }
+        .step.error {
+            border-color: #dc3545;
+            background: #fff5f5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔬 Complete eBay OAuth Flow Test</h1>
+        <p>This tool tests the complete OAuth flow from start to finish.</p>
+
+        <div class="step" id="step-login">
+            <h2>Step 0: Login to Get Auth Token</h2>
+            <input type="email" id="email" placeholder="Your email" />
+            <input type="password" id="password" type="password" placeholder="Your password" />
+            <button onclick="login()">Login</button>
+            <div id="authToken"></div>
+        </div>
+
+        <div class="step" id="step-credentials">
+            <h2>Step 1: Check/Set eBay Credentials</h2>
+            <button onclick="checkCredentials()" id="checkCredsBtn" disabled>Check Stored Credentials</button>
+            <button onclick="showSetCredentials()" disabled>Set New Credentials</button>
+            <div id="setCredsForm" style="display:none; margin-top: 20px;">
+                <input type="text" id="appId" placeholder="eBay App ID (Client ID)" />
+                <input type="password" id="certId" placeholder="eBay Cert ID (Client Secret)" />
+                <button onclick="saveCredentials()">Save Credentials</button>
+            </div>
+        </div>
+
+        <div class="step" id="step-authurl">
+            <h2>Step 2: Generate Authorization URL</h2>
+            <button onclick="generateAuthUrl()" id="genUrlBtn" disabled>Generate Auth URL</button>
+            <div id="authUrlDisplay"></div>
+        </div>
+
+        <div class="step" id="step-callback">
+            <h2>Step 3: Handle OAuth Callback</h2>
+            <p>After authorizing with eBay, paste the full callback URL here:</p>
+            <textarea id="callbackUrl" rows="3" placeholder="https://dainty-horse-49c336.netlify.app/.netlify/functions/ebay-oauth?code=...&state=..."></textarea>
+            <button onclick="processCallback()">Process Callback</button>
+        </div>
+
+        <div class="step" id="step-verify">
+            <h2>Step 4: Verify Token Storage</h2>
+            <button onclick="verifyTokens()">Verify Stored Tokens</button>
+        </div>
+
+        <h2>Output:</h2>
+        <div id="output">Ready to test...</div>
+    </div>
+
+    <script>
+        let authToken = null;
+        let currentState = null;
+
+        function log(message, type = 'info') {
+            const output = document.getElementById('output');
+            const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
+            output.innerHTML += `<span class="${type}">[${timestamp}] ${message}</span>\n`;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function clear() {
+            document.getElementById('output').innerHTML = '';
+        }
+
+        function setStepStatus(stepId, status) {
+            const step = document.getElementById(stepId);
+            step.classList.remove('active', 'complete', 'error');
+            if (status) step.classList.add(status);
+        }
+
+        async function login() {
+            clear();
+            setStepStatus('step-login', 'active');
+
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+
+            if (!email || !password) {
+                log('Please enter email and password', 'error');
+                return;
+            }
+
+            log('Logging in...', 'info');
+
+            try {
+                // First, sign in with Supabase
+                const response = await fetch('https://tqlysppgnjabzwvysvfk.supabase.co/auth/v1/token?grant_type=password', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRxbHlzcHBnbmphYnp3dnlzdmZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mjg3NzgyNDEsImV4cCI6MjA0NDM1NDI0MX0.u2Tco9rwZY72W6bYLxXtlqRD-18kQLqaP8qCUQgpzNE'
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+
+                if (data.access_token) {
+                    authToken = data.access_token;
+                    log('Login successful!', 'success');
+                    log('Auth token obtained: ' + authToken.substring(0, 20) + '...', 'success');
+
+                    document.getElementById('authToken').innerHTML =
+                        '<div style="margin-top: 10px; padding: 10px; background: #e8f5e9; border-radius: 5px;">' +
+                        '<strong>Token:</strong> ' + authToken.substring(0, 30) + '...' +
+                        '</div>';
+
+                    // Enable next steps
+                    document.getElementById('checkCredsBtn').disabled = false;
+                    document.querySelectorAll('button[disabled]').forEach(btn => {
+                        if (btn.textContent.includes('Set New Credentials')) {
+                            btn.disabled = false;
+                        }
+                    });
+
+                    setStepStatus('step-login', 'complete');
+                } else {
+                    throw new Error(data.error_description || 'Login failed');
+                }
+            } catch (error) {
+                log('Login error: ' + error.message, 'error');
+                setStepStatus('step-login', 'error');
+            }
+        }
+
+        async function checkCredentials() {
+            if (!authToken) {
+                log('Please login first', 'error');
+                return;
+            }
+
+            setStepStatus('step-credentials', 'active');
+            log('Checking stored eBay credentials...', 'info');
+
+            try {
+                const response = await fetch('/.netlify/functions/ebay-oauth?action=get-credentials', {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    log('Credentials found!', 'success');
+                    log('App ID: ' + data.credentials.app_id.substring(0, 10) + '...', 'success');
+                    log('Has Cert ID: ' + (data.credentials.cert_id ? 'Yes' : 'No'), 'success');
+                    log('Redirect URI: ' + data.credentials.redirect_uri, 'info');
+
+                    // Enable auth URL generation
+                    document.getElementById('genUrlBtn').disabled = false;
+                    setStepStatus('step-credentials', 'complete');
+                } else {
+                    log('No credentials found or error: ' + (data.error || 'Unknown'), 'warning');
+                    log('You need to set your eBay credentials first', 'warning');
+                    document.getElementById('setCredsForm').style.display = 'block';
+                }
+            } catch (error) {
+                log('Error checking credentials: ' + error.message, 'error');
+                setStepStatus('step-credentials', 'error');
+            }
+        }
+
+        function showSetCredentials() {
+            document.getElementById('setCredsForm').style.display = 'block';
+        }
+
+        async function saveCredentials() {
+            if (!authToken) {
+                log('Please login first', 'error');
+                return;
+            }
+
+            const appId = document.getElementById('appId').value;
+            const certId = document.getElementById('certId').value;
+
+            if (!appId || !certId) {
+                log('Please enter both App ID and Cert ID', 'error');
+                return;
+            }
+
+            log('Saving credentials...', 'info');
+
+            try {
+                const response = await fetch('/.netlify/functions/ebay-oauth', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        action: 'save-credentials',
+                        app_id: appId,
+                        cert_id: certId
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    log('Credentials saved successfully!', 'success');
+                    document.getElementById('setCredsForm').style.display = 'none';
+                    document.getElementById('genUrlBtn').disabled = false;
+                    setStepStatus('step-credentials', 'complete');
+                } else {
+                    log('Failed to save credentials: ' + (data.error || 'Unknown error'), 'error');
+                }
+            } catch (error) {
+                log('Error saving credentials: ' + error.message, 'error');
+            }
+        }
+
+        async function generateAuthUrl() {
+            if (!authToken) {
+                log('Please login first', 'error');
+                return;
+            }
+
+            setStepStatus('step-authurl', 'active');
+            log('Generating authorization URL...', 'info');
+
+            try {
+                const response = await fetch('/.netlify/functions/ebay-oauth?action=auth-url', {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+
+                const responseText = await response.text();
+                let data;
+
+                try {
+                    data = JSON.parse(responseText);
+                } catch (e) {
+                    log('Failed to parse response:', 'error');
+                    log(responseText, 'error');
+                    return;
+                }
+
+                if (response.ok && data.success && data.authUrl) {
+                    currentState = data.state;
+                    log('Authorization URL generated!', 'success');
+                    log('State parameter: ' + currentState, 'info');
+
+                    const authUrlDisplay = document.getElementById('authUrlDisplay');
+                    authUrlDisplay.innerHTML = `
+                        <div style="margin-top: 20px; padding: 15px; background: #f0f8ff; border-radius: 5px;">
+                            <strong>Authorization URL:</strong><br>
+                            <a href="${data.authUrl}" target="_blank" style="word-break: break-all;">
+                                ${data.authUrl}
+                            </a><br><br>
+                            <button onclick="window.open('${data.authUrl}', 'ebay-auth', 'width=600,height=700')">
+                                Open in Popup Window
+                            </button>
+                            <button onclick="window.open('${data.authUrl}', '_blank')">
+                                Open in New Tab
+                            </button>
+                        </div>
+                    `;
+
+                    setStepStatus('step-authurl', 'complete');
+
+                    // Listen for messages from popup
+                    window.addEventListener('message', handleOAuthMessage);
+                } else {
+                    log('Failed to generate auth URL:', 'error');
+                    log('Error: ' + (data.error || 'Unknown error'), 'error');
+                    log('Full response: ' + JSON.stringify(data), 'error');
+                    setStepStatus('step-authurl', 'error');
+                }
+            } catch (error) {
+                log('Error generating auth URL: ' + error.message, 'error');
+                setStepStatus('step-authurl', 'error');
+            }
+        }
+
+        function handleOAuthMessage(event) {
+            if (event.data.type === 'ebay-oauth-success') {
+                log('OAuth SUCCESS received via postMessage!', 'success');
+                log('Message: ' + JSON.stringify(event.data), 'success');
+                setStepStatus('step-callback', 'complete');
+                setStepStatus('step-verify', 'active');
+            } else if (event.data.type === 'ebay-oauth-error') {
+                log('OAuth ERROR received via postMessage!', 'error');
+                log('Error: ' + event.data.error, 'error');
+                log('Message: ' + event.data.message, 'error');
+                setStepStatus('step-callback', 'error');
+            }
+        }
+
+        async function processCallback() {
+            const callbackUrl = document.getElementById('callbackUrl').value;
+
+            if (!callbackUrl) {
+                log('Please paste the callback URL', 'error');
+                return;
+            }
+
+            setStepStatus('step-callback', 'active');
+            log('Processing callback URL...', 'info');
+
+            try {
+                const url = new URL(callbackUrl);
+                const code = url.searchParams.get('code');
+                const state = url.searchParams.get('state');
+                const error = url.searchParams.get('error');
+
+                if (error) {
+                    log('OAuth error in callback: ' + error, 'error');
+                    const errorDesc = url.searchParams.get('error_description');
+                    if (errorDesc) log('Error description: ' + errorDesc, 'error');
+                    setStepStatus('step-callback', 'error');
+                    return;
+                }
+
+                if (!code || !state) {
+                    log('Missing code or state in callback URL', 'error');
+                    setStepStatus('step-callback', 'error');
+                    return;
+                }
+
+                log('Code: ' + code.substring(0, 20) + '...', 'info');
+                log('State: ' + state, 'info');
+
+                if (currentState && state !== currentState) {
+                    log('WARNING: State mismatch!', 'warning');
+                    log('Expected: ' + currentState, 'warning');
+                    log('Received: ' + state, 'warning');
+                }
+
+                log('The OAuth callback should have been handled automatically by the server', 'info');
+                log('If you see this, the automatic handling may have failed', 'warning');
+
+                setStepStatus('step-callback', 'complete');
+            } catch (error) {
+                log('Error processing callback: ' + error.message, 'error');
+                setStepStatus('step-callback', 'error');
+            }
+        }
+
+        async function verifyTokens() {
+            if (!authToken) {
+                log('Please login first', 'error');
+                return;
+            }
+
+            setStepStatus('step-verify', 'active');
+            log('Verifying stored tokens...', 'info');
+
+            try {
+                const response = await fetch('/.netlify/functions/ebay-oauth?action=status', {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data) {
+                    if (data.hasRefreshToken) {
+                        log('✅ Refresh token is stored!', 'success');
+                        log('Token stored at: ' + data.tokenUpdatedAt, 'success');
+                        log('eBay User: ' + (data.ebayUserId || 'Not set'), 'info');
+                        setStepStatus('step-verify', 'complete');
+                    } else {
+                        log('❌ No refresh token found', 'error');
+                        setStepStatus('step-verify', 'error');
+                    }
+
+                    if (data.hasAppCredentials) {
+                        log('App credentials are configured', 'success');
+                    } else {
+                        log('App credentials are missing', 'warning');
+                    }
+                } else {
+                    log('Failed to check status: ' + (data.error || 'Unknown error'), 'error');
+                    setStepStatus('step-verify', 'error');
+                }
+            } catch (error) {
+                log('Error verifying tokens: ' + error.message, 'error');
+                setStepStatus('step-verify', 'error');
+            }
+        }
+
+        // Initialize
+        clear();
+        log('Complete eBay OAuth Flow Test Ready', 'success');
+        log('This tool tests the entire OAuth flow step by step', 'info');
+        log('Start by logging in with your credentials', 'info');
+    </script>
+</body>
+</html>

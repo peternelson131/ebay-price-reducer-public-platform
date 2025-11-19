@@ -1,0 +1,158 @@
+const { Handler, schedule } = require('@netlify/functions');
+const { createClient } = require('@supabase/supabase-js');
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+// Main handler for scheduled jobs
+const handler = async (event, context) => {
+  try {
+    const jobType = event.queryStringParameters?.job || 'all';
+
+    console.log(`Running scheduled job: ${jobType}`);
+
+    switch (jobType) {
+      case 'sync':
+        return await runSyncJob();
+      case 'price-reduction':
+        return await runPriceReductionJob();
+      case 'cleanup':
+        return await runCleanupJob();
+      case 'all':
+      default:
+        return await runAllJobs();
+    }
+
+  } catch (error) {
+    console.error('Scheduled job failed:', error);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString()
+      })
+    };
+  }
+};
+
+// Run all active users' sync jobs
+async function runSyncJob() {
+  const { data: users } = await supabase
+    .from('users')
+    .select('id')
+    .eq('active', true);
+
+  let syncedUsers = 0;
+  for (const user of users || []) {
+    try {
+      // Call sync-listings function for each user
+      const response = await fetch(`${process.env.URL}/.netlify/functions/sync-listings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id })
+      });
+
+      if (response.ok) syncedUsers++;
+    } catch (error) {
+      console.error(`Sync failed for user ${user.id}:`, error);
+    }
+  }
+
+  return {
+    statusCode: 200,
+    body: JSON.stringify({
+      success: true,
+      job: 'sync',
+      syncedUsers,
+      timestamp: new Date().toISOString()
+    })
+  };
+}
+
+// Run price reduction engine
+async function runPriceReductionJob() {
+  try {
+    const response = await fetch(`${process.env.URL}/.netlify/functions/price-reduction-engine`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    const result = await response.json();
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        success: true,
+        job: 'price-reduction',
+        result,
+        timestamp: new Date().toISOString()
+      })
+    };
+  } catch (error) {
+    throw new Error(`Price reduction job failed: ${error.message}`);
+  }
+}
+
+// Clean up old data
+async function runCleanupJob() {
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  // Clean up old notifications
+  const { error: notifyError } = await supabase
+    .from('notifications')
+    .delete()
+    .lt('created_at', thirtyDaysAgo.toISOString());
+
+  // Clean up old sync errors
+  const { error: errorCleanup } = await supabase
+    .from('sync_errors')
+    .delete()
+    .lt('created_at', thirtyDaysAgo.toISOString());
+
+  return {
+    statusCode: 200,
+    body: JSON.stringify({
+      success: true,
+      job: 'cleanup',
+      timestamp: new Date().toISOString()
+    })
+  };
+}
+
+// Run all jobs in sequence
+async function runAllJobs() {
+  const results = {};
+
+  try {
+    results.sync = await runSyncJob();
+    results.priceReduction = await runPriceReductionJob();
+    results.cleanup = await runCleanupJob();
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        success: true,
+        job: 'all',
+        results,
+        timestamp: new Date().toISOString()
+      })
+    };
+  } catch (error) {
+    return {
+      statusCode: 500,
+      body: JSON.stringify({
+        success: false,
+        error: error.message,
+        results,
+        timestamp: new Date().toISOString()
+      })
+    };
+  }
+}
+
+// Export handler for Netlify
+module.exports = { handler };

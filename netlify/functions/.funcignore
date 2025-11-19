@@ -1,0 +1,2 @@
+# Exclude development and test functions from deployment
+functions-dev/**

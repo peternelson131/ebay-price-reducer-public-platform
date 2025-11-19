@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>eBay OAuth Token Test</title>
+    <style>
+        body {
+            font-family: monospace;
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            font-family: monospace;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            cursor: pointer;
+            margin: 10px 0;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        #result {
+            background: #f4f4f4;
+            padding: 20px;
+            border: 1px solid #ddd;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+        }
+        .error {
+            color: red;
+        }
+        .success {
+            color: green;
+        }
+        h2 {
+            margin-top: 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>eBay OAuth Token Exchange Test</h1>
+
+    <div class="section">
+        <h2>Step 1: Generate Authorization URL</h2>
+        <p>Enter your eBay credentials and generate the authorization URL.</p>
+
+        <input type="text" id="clientId" placeholder="eBay App ID (Client ID)" />
+        <input type="text" id="redirectUri" placeholder="Redirect URI (must match RuName exactly)"
+               value="https://dainty-horse-49c336.netlify.app/.netlify/functions/ebay-oauth" />
+
+        <label>
+            <input type="checkbox" id="includeRootScope" checked> Include root scope (https://api.ebay.com/oauth/api_scope)
+        </label>
+
+        <button onclick="generateAuthUrl()">Generate Authorization URL</button>
+
+        <div id="authUrl" style="margin-top: 20px;"></div>
+    </div>
+
+    <div class="section">
+        <h2>Step 2: Exchange Authorization Code</h2>
+        <p>After authorizing, copy the authorization code from the callback URL and paste it here.</p>
+
+        <textarea id="authCode" rows="3" placeholder="Paste the authorization code here"></textarea>
+        <input type="password" id="clientSecret" placeholder="eBay Cert ID (Client Secret)" />
+
+        <button onclick="testTokenExchange()">Test Token Exchange</button>
+
+        <div id="result"></div>
+    </div>
+
+    <script>
+        function generateAuthUrl() {
+            const clientId = document.getElementById('clientId').value;
+            const redirectUri = document.getElementById('redirectUri').value;
+            const includeRoot = document.getElementById('includeRootScope').checked;
+
+            if (!clientId || !redirectUri) {
+                alert('Please enter Client ID and Redirect URI');
+                return;
+            }
+
+            let scopes = [];
+            if (includeRoot) {
+                scopes.push('https://api.ebay.com/oauth/api_scope');
+            }
+            scopes.push(
+                'https://api.ebay.com/oauth/api_scope/sell.inventory',
+                'https://api.ebay.com/oauth/api_scope/sell.inventory.readonly',
+                'https://api.ebay.com/oauth/api_scope/sell.account.readonly',
+                'https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly'
+            );
+
+            const scope = scopes.join(' ');
+            const state = 'test_' + Date.now();
+
+            const authUrl = 'https://auth.ebay.com/oauth2/authorize?' +
+                'client_id=' + encodeURIComponent(clientId) +
+                '&response_type=code' +
+                '&redirect_uri=' + encodeURIComponent(redirectUri) +
+                '&scope=' + encodeURIComponent(scope) +
+                '&state=' + state;
+
+            document.getElementById('authUrl').innerHTML =
+                '<strong>Authorization URL:</strong><br>' +
+                '<a href="' + authUrl + '" target="_blank">' + authUrl + '</a><br><br>' +
+                '<button onclick="window.open(\'' + authUrl + '\', \'_blank\')">Open in New Window</button><br><br>' +
+                '<strong>Scopes requested:</strong><br>' + scopes.join('<br>');
+        }
+
+        async function testTokenExchange() {
+            const code = document.getElementById('authCode').value;
+            const clientId = document.getElementById('clientId').value;
+            const clientSecret = document.getElementById('clientSecret').value;
+            const redirectUri = document.getElementById('redirectUri').value;
+
+            if (!code || !clientId || !clientSecret || !redirectUri) {
+                alert('Please fill in all fields');
+                return;
+            }
+
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = 'Testing token exchange...';
+
+            try {
+                // Test using our test endpoint
+                const response = await fetch('https://dainty-horse-49c336.netlify.app/.netlify/functions/test-ebay-token', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        code: code.trim(),
+                        client_id: clientId.trim(),
+                        client_secret: clientSecret.trim(),
+                        redirect_uri: redirectUri.trim()
+                    })
+                });
+
+                const result = await response.json();
+
+                // Display formatted result
+                let output = '=== TOKEN EXCHANGE RESULT ===\n\n';
+
+                if (result.success) {
+                    output += '✅ SUCCESS\n\n';
+                } else {
+                    output += '❌ FAILED\n\n';
+                }
+
+                output += 'Status: ' + result.status + '\n\n';
+
+                if (result.analysis) {
+                    output += '=== ANALYSIS ===\n';
+                    output += 'Has Access Token: ' + (result.analysis.has_access_token ? '✅ YES' : '❌ NO') + '\n';
+                    output += 'Has Refresh Token: ' + (result.analysis.has_refresh_token ? '✅ YES' : '❌ NO') + '\n';
+                    output += 'Token Type: ' + result.analysis.token_type + '\n';
+                    output += 'Access Token Expires In: ' + result.analysis.expires_in + ' seconds\n';
+                    output += 'Refresh Token Expires In: ' + result.analysis.refresh_token_expires_in + ' seconds\n';
+                    output += 'Code Was Decoded: ' + result.analysis.code_was_decoded + '\n';
+                    output += 'All Properties: ' + result.analysis.all_properties.join(', ') + '\n\n';
+                }
+
+                output += '=== FULL RESPONSE ===\n';
+                output += JSON.stringify(result.data, null, 2);
+
+                resultDiv.innerHTML = output;
+
+                // Highlight the important part
+                if (result.analysis && !result.analysis.has_refresh_token) {
+                    resultDiv.innerHTML += '\n\n' +
+                        '<span class="error">⚠️ PROBLEM: No refresh token received!</span>\n' +
+                        'This means eBay is not issuing a refresh token for this authorization.\n' +
+                        'Possible reasons:\n' +
+                        '1. Application configuration in eBay Developer account\n' +
+                        '2. Missing "Marketplace account deletion" settings\n' +
+                        '3. Sandbox vs Production mismatch\n' +
+                        '4. Token already exists for this user';
+                }
+
+            } catch (error) {
+                resultDiv.innerHTML = '<span class="error">Error: ' + error.message + '</span>';
+            }
+        }
+    </script>
+</body>
+</html>
