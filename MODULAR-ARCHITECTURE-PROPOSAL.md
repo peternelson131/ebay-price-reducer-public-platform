@@ -406,7 +406,7 @@ CREATE TABLE workflow_templates (
 - Build basic node interface
 
 **Deliverables:**
-- [ ] New Git repository: `ebay-platform-modular`
+- [ ] New Git repository: `ebay-price-reducer-public-platform`
 - [ ] Core modules: auth, storage, monitoring
 - [ ] WorkflowRunner class (basic execution)
 - [ ] Node interface specification
@@ -769,7 +769,7 @@ if (user.features.includes('workflow-engine')) {
 ### Immediate Actions (This Week)
 
 1. **Review this proposal** with team
-2. **Create new repository**: `ebay-platform-modular`
+2. **Create new repository**: `ebay-price-reducer-public-platform`
 3. **Set up project structure**
 4. **Choose migration strategy** (A, B, or C)
 
@@ -777,8 +777,8 @@ if (user.features.includes('workflow-engine')) {
 
 ```bash
 # Create new repo
-mkdir ebay-platform-modular
-cd ebay-platform-modular
+mkdir ebay-price-reducer-public-platform
+cd ebay-price-reducer-public-platform
 
 # Initialize
 npm init -y

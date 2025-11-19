@@ -77,7 +77,7 @@ netlify dev
 ## Relationship to Original
 
 - **Original repo**: `~/Projects/ebay-price-reducer` (still maintained)
-- **This repo**: `~/Projects/ebay-platform-modular` (new modular version)
+- **This repo**: `~/Projects/ebay-price-reducer-public-platform` (new modular version)
 - Both repos will coexist during development
 - Migration strategy TBD (gradual rollout recommended)
 

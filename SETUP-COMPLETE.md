@@ -1,4 +1,4 @@
-# Setup Complete - eBay Platform Modular
+# Setup Complete - eBay Price Reducer Public Platform
 
 **Date**: 2025-11-19
 **Status**: ✅ Repository Initialized
@@ -8,7 +8,7 @@
 ## What Was Done
 
 ### 1. Repository Created
-- **Location**: `~/Projects/ebay-platform-modular`
+- **Location**: `~/Projects/ebay-price-reducer-public-platform`
 - **Source**: Copied from `~/Projects/ebay-price-reducer`
 - **Git**: Initialized with clean history
 
@@ -20,7 +20,7 @@
 
 ### 3. Structure Preserved
 ```
-ebay-platform-modular/
+ebay-price-reducer-public-platform/
 ├── frontend/              # React + Vite frontend
 │   ├── src/
 │   │   ├── components/
@@ -52,7 +52,7 @@ ebay-platform-modular/
 
 ### Git Configuration
 ```bash
-Repository: /Users/peternelson/Projects/ebay-platform-modular/.git
+Repository: /Users/peternelson/Projects/ebay-price-reducer-public-platform/.git
 Branch: main
 Commits: 1
 User: Pete Nelson <petenelson13@gmail.com>
@@ -74,7 +74,7 @@ Remote: None (local only)
 
 ### Step 1: Review the Plan
 ```bash
-cd ~/Projects/ebay-platform-modular
+cd ~/Projects/ebay-price-reducer-public-platform
 cat MODULAR-ARCHITECTURE-PROPOSAL.md
 ```
 
@@ -115,7 +115,7 @@ cd ../.. && netlify dev
    - Continue to work here if needed
    - Safe backup of working code
 
-2. **Modular**: `~/Projects/ebay-platform-modular`
+2. **Public Platform**: `~/Projects/ebay-price-reducer-public-platform`
    - Experimental refactor
    - We'll build incrementally here
    - Can always go back to original
@@ -130,7 +130,7 @@ cd ../.. && netlify dev
 Current state:
 ```bash
 # Check status
-cd ~/Projects/ebay-platform-modular
+cd ~/Projects/ebay-price-reducer-public-platform
 git status
 
 # View commit history
@@ -213,6 +213,6 @@ We'll go step by step, and I'll explain everything as we build. No confusion, ju
 ---
 
 **Setup completed**: 2025-11-19
-**Repository**: ~/Projects/ebay-platform-modular
+**Repository**: ~/Projects/ebay-price-reducer-public-platform
 **Status**: Ready for development
 **Next**: Your choice - what do you want to build first?
