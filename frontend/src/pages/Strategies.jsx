@@ -1,26 +1,25 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { strategiesAPI } from '../lib/supabase'
+import { Plus, FileText, Check, X } from 'lucide-react'
 
 export default function Strategies() {
   const queryClient = useQueryClient()
   const [showModal, setShowModal] = useState(false)
   const [editingRule, setEditingRule] = useState(null)
-  const [notification, setNotification] = useState(null) // { type: 'success'|'error', message: string }
+  const [notification, setNotification] = useState(null)
   const [newRule, setNewRule] = useState({
     name: '',
-    reduction_type: 'percentage', // 'percentage' or 'dollar'
+    reduction_type: 'percentage',
     reduction_amount: 5,
     frequency_days: 7
   })
 
-  // Fetch strategies from database
   const { data: rules = [], isLoading, error } = useQuery({
     queryKey: ['strategies'],
     queryFn: strategiesAPI.getStrategies
   })
 
-  // Create strategy mutation
   const createStrategyMutation = useMutation({
     mutationFn: strategiesAPI.createStrategy,
     onSuccess: (newStrategy) => {
@@ -32,7 +31,6 @@ export default function Strategies() {
     }
   })
 
-  // Update strategy mutation
   const updateStrategyMutation = useMutation({
     mutationFn: ({ id, updates }) => strategiesAPI.updateStrategy(id, updates),
     onSuccess: (updatedStrategy) => {
@@ -44,7 +42,6 @@ export default function Strategies() {
     }
   })
 
-  // Delete strategy mutation
   const deleteStrategyMutation = useMutation({
     mutationFn: strategiesAPI.deleteStrategy,
     onSuccess: () => {
@@ -58,10 +55,7 @@ export default function Strategies() {
 
   const showNotification = (type, message) => {
     setNotification({ type, message })
-    // Auto-dismiss after 5 seconds
-    setTimeout(() => {
-      setNotification(null)
-    }, 5000)
+    setTimeout(() => setNotification(null), 5000)
   }
 
   const handleCreateRule = () => {
@@ -85,7 +79,7 @@ export default function Strategies() {
       reduction_type: newRule.reduction_type,
       reduction_amount: newRule.reduction_amount,
       frequency_days: newRule.frequency_days,
-      active: true
+      is_active: true
     })
 
     setNewRule({
@@ -109,16 +103,6 @@ export default function Strategies() {
     }
   }
 
-  const handleToggleActive = (id) => {
-    const rule = rules.find(r => r.id === id)
-    if (rule) {
-      updateStrategyMutation.mutate({
-        id,
-        updates: { active: !rule.active }
-      })
-    }
-  }
-
   const resetModal = () => {
     setNewRule({
       name: '',
@@ -129,20 +113,18 @@ export default function Strategies() {
     setShowModal(false)
   }
 
-  // Show loading state
   if (isLoading) {
     return (
       <div className="flex justify-center items-center h-64">
-        <div className="text-gray-500">Loading strategies...</div>
+        <div className="text-text-secondary">Loading strategies...</div>
       </div>
     )
   }
 
-  // Show error state
   if (error) {
     return (
       <div className="flex justify-center items-center h-64">
-        <div className="text-red-500">Error loading strategies: {error.message}</div>
+        <div className="text-error">Error loading strategies: {error.message}</div>
       </div>
     )
   }
@@ -152,14 +134,14 @@ export default function Strategies() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Price Reduction Rules</h1>
-          <p className="text-gray-600 mt-2 text-sm sm:text-base">Create and manage automated price reduction rules for your listings</p>
+          <h1 className="text-2xl sm:text-3xl font-semibold text-text-primary">Price Reduction Rules</h1>
+          <p className="text-text-secondary mt-2 text-sm sm:text-base">Create and manage automated price reduction rules for your listings</p>
         </div>
         <button
           onClick={() => setShowModal(true)}
-          className="bg-blue-600 text-white px-4 sm:px-6 py-2 sm:py-3 rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center space-x-2 w-full sm:w-auto"
+          className="bg-accent text-white px-4 sm:px-6 py-2 sm:py-3 rounded-lg hover:bg-accent-hover font-medium flex items-center justify-center space-x-2 w-full sm:w-auto transition-colors"
         >
-          <span>➕</span>
+          <Plus className="h-4 w-4" strokeWidth={2} />
           <span>Add New Rule</span>
         </button>
       </div>
@@ -168,66 +150,52 @@ export default function Strategies() {
       {notification && (
         <div className={`rounded-lg p-4 flex items-center justify-between ${
           notification.type === 'success'
-            ? 'bg-blue-50 border border-blue-200'
-            : 'bg-red-50 border border-red-200'
+            ? 'bg-success/10 border border-success/30'
+            : 'bg-error/10 border border-error/30'
         }`}>
           <div className="flex items-center space-x-3">
-            <div className={`flex-shrink-0 ${
-              notification.type === 'success' ? 'text-blue-600' : 'text-red-600'
+            <div className={notification.type === 'success' ? 'text-success' : 'text-error'}>
+              {notification.type === 'success' ? <Check className="h-5 w-5" strokeWidth={2} /> : <X className="h-5 w-5" strokeWidth={2} />}
+            </div>
+            <p className={`text-sm font-medium ${
+              notification.type === 'success' ? 'text-success' : 'text-error'
             }`}>
-              {notification.type === 'success' ? (
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </svg>
-              ) : (
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                </svg>
-              )}
-            </div>
-            <div>
-              <p className={`text-sm font-medium ${
-                notification.type === 'success' ? 'text-blue-800' : 'text-red-800'
-              }`}>
-                {notification.message}
-              </p>
-            </div>
+              {notification.message}
+            </p>
           </div>
           <button
             onClick={() => setNotification(null)}
-            className={`flex-shrink-0 text-sm font-medium ${
-              notification.type === 'success'
-                ? 'text-blue-600 hover:text-blue-800'
-                : 'text-red-600 hover:text-red-800'
+            className={`text-sm font-medium ${
+              notification.type === 'success' ? 'text-success hover:text-success' : 'text-error hover:text-error'
             }`}
           >
-            ✕
+            <X className="h-4 w-4" strokeWidth={2} />
           </button>
         </div>
       )}
 
       {/* Rules List */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
-          <h3 className="text-lg font-medium text-gray-900">Your Rules ({rules.length})</h3>
+      <div className="bg-dark-surface rounded-lg border border-dark-border overflow-hidden">
+        <div className="px-4 sm:px-6 py-4 border-b border-dark-border">
+          <h3 className="text-lg font-medium text-text-primary">Your Rules ({rules.length})</h3>
         </div>
 
         {rules.length === 0 ? (
           <div className="px-4 sm:px-6 py-8 sm:py-12 text-center">
-            <div className="text-gray-400 text-6xl mb-4">📋</div>
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No rules created yet</h3>
-            <p className="text-gray-600 mb-4">Create your first price reduction rule to get started</p>
+            <FileText className="h-16 w-16 text-text-tertiary mx-auto mb-4" strokeWidth={1} />
+            <h3 className="text-lg font-medium text-text-primary mb-2">No rules created yet</h3>
+            <p className="text-text-secondary mb-4">Create your first price reduction rule to get started</p>
             <button
               onClick={() => setShowModal(true)}
-              className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+              className="bg-accent text-white px-4 py-2 rounded-lg hover:bg-accent-hover transition-colors"
             >
               Create First Rule
             </button>
           </div>
         ) : (
-          <div className="divide-y divide-gray-200">
+          <div className="divide-y divide-dark-border">
             {rules.map((rule) => (
-              <div key={rule.id} className="px-4 sm:px-6 py-4 sm:py-6">
+              <div key={rule.id} className="px-4 sm:px-6 py-4 sm:py-6 hover:bg-dark-hover transition-colors">
                 {editingRule === rule.id ? (
                   <EditRuleForm
                     rule={rule}
@@ -239,56 +207,39 @@ export default function Strategies() {
                   <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
                     <div className="flex-1">
                       <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 mb-3">
-                        <h4 className="text-lg font-medium text-gray-900">{rule.name}</h4>
-                        <div className="flex items-center gap-2">
-                          <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                          rule.active
-                            ? 'bg-green-100 text-green-800'
-                            : 'bg-gray-100 text-gray-800'
-                        }`}>
-                          {rule.active ? 'Active' : 'Inactive'}
-                          </span>
-                        </div>
+                        <h4 className="text-lg font-medium text-text-primary">{rule.name}</h4>
                       </div>
 
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-6 text-sm">
                         <div className="flex items-center space-x-2">
-                          <span className="text-gray-500">Reduction:</span>
-                          <div className="font-medium text-blue-600">
-                            {rule.reduction_type === 'percentage' ? `${rule.reduction_amount}%` : `$${rule.reduction_amount}`}
+                          <span className="text-text-tertiary">Reduction:</span>
+                          <div className="font-medium text-accent">
+                            {(rule.strategy_type || rule.reduction_type) === 'percentage' 
+                              ? `${rule.reduction_percentage || rule.reduction_amount}%` 
+                              : `$${rule.reduction_amount}`}
                           </div>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <span className="text-gray-500">Frequency:</span>
-                          <div className="font-medium">Every {rule.frequency_days} day{rule.frequency_days !== 1 ? 's' : ''}</div>
+                          <span className="text-text-tertiary">Frequency:</span>
+                          <div className="font-medium text-text-primary">Every {rule.interval_days || rule.frequency_days || '?'} day{(rule.interval_days || rule.frequency_days) !== 1 ? 's' : ''}</div>
                         </div>
                         <div className="flex items-center space-x-2">
-                          <span className="text-gray-500">Created:</span>
-                          <div className="font-medium">{new Date(rule.created_at).toLocaleDateString()}</div>
+                          <span className="text-text-tertiary">Created:</span>
+                          <div className="font-medium text-text-primary">{new Date(rule.created_at).toLocaleDateString()}</div>
                         </div>
                       </div>
                     </div>
 
                     <div className="flex flex-col sm:flex-row gap-2 lg:ml-6">
                       <button
-                        onClick={() => handleToggleActive(rule.id)}
-                        className={`px-4 py-2 rounded text-sm font-medium w-full sm:w-auto ${
-                          rule.active
-                            ? 'bg-yellow-100 text-yellow-800 hover:bg-yellow-200'
-                            : 'bg-green-100 text-green-800 hover:bg-green-200'
-                        }`}
-                      >
-                        {rule.active ? 'Pause' : 'Activate'}
-                      </button>
-                      <button
                         onClick={() => setEditingRule(rule.id)}
-                        className="bg-blue-100 text-blue-800 px-4 py-2 rounded text-sm font-medium hover:bg-blue-200 w-full sm:w-auto"
+                        className="bg-accent/10 text-accent border border-accent/30 px-4 py-2 rounded-lg text-sm font-medium hover:bg-accent/20 w-full sm:w-auto transition-colors"
                       >
                         Edit
                       </button>
                       <button
                         onClick={() => handleDeleteRule(rule.id)}
-                        className="bg-red-100 text-red-800 px-4 py-2 rounded text-sm font-medium hover:bg-red-200 w-full sm:w-auto"
+                        className="bg-error/10 text-error border border-error/30 px-4 py-2 rounded-lg text-sm font-medium hover:bg-error/20 w-full sm:w-auto transition-colors"
                       >
                         Delete
                       </button>
@@ -303,40 +254,40 @@ export default function Strategies() {
 
       {/* Add New Rule Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg p-4 sm:p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-dark-surface border border-dark-border rounded-xl p-4 sm:p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-medium text-gray-900">Create New Rule</h3>
+              <h3 className="text-lg font-medium text-text-primary">Create New Rule</h3>
               <button
                 onClick={resetModal}
-                className="text-gray-400 hover:text-gray-600 text-xl"
+                className="text-text-tertiary hover:text-text-primary transition-colors p-1 rounded-lg hover:bg-dark-hover"
               >
-                ✕
+                <X className="h-5 w-5" strokeWidth={1.5} />
               </button>
             </div>
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Rule Name</label>
+                <label className="block text-sm font-medium text-text-secondary mb-1.5">Rule Name</label>
                 <input
                   type="text"
                   value={newRule.name}
                   onChange={(e) => setNewRule(prev => ({ ...prev, name: e.target.value }))}
                   placeholder="e.g., Quick Sale Rule"
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full bg-dark-bg border border-dark-border rounded-lg px-3 py-2.5 text-text-primary placeholder-text-tertiary focus:ring-2 focus:ring-accent focus:border-transparent transition-colors"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Reduction Type</label>
+                <label className="block text-sm font-medium text-text-secondary mb-1.5">Reduction Type</label>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={() => setNewRule(prev => ({ ...prev, reduction_type: 'percentage' }))}
-                    className={`px-3 py-2 rounded-md border text-sm font-medium ${
+                    className={`px-3 py-2.5 rounded-lg border text-sm font-medium transition-colors ${
                       newRule.reduction_type === 'percentage'
-                        ? 'bg-blue-50 border-blue-500 text-blue-700'
-                        : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                        ? 'bg-accent/10 border-accent text-accent'
+                        : 'bg-dark-bg border-dark-border text-text-secondary hover:bg-dark-hover'
                     }`}
                   >
                     Percentage (%)
@@ -344,10 +295,10 @@ export default function Strategies() {
                   <button
                     type="button"
                     onClick={() => setNewRule(prev => ({ ...prev, reduction_type: 'dollar' }))}
-                    className={`px-3 py-2 rounded-md border text-sm font-medium ${
+                    className={`px-3 py-2.5 rounded-lg border text-sm font-medium transition-colors ${
                       newRule.reduction_type === 'dollar'
-                        ? 'bg-blue-50 border-blue-500 text-blue-700'
-                        : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                        ? 'bg-accent/10 border-accent text-accent'
+                        : 'bg-dark-bg border-dark-border text-text-secondary hover:bg-dark-hover'
                     }`}
                   >
                     Dollar Amount ($)
@@ -356,7 +307,7 @@ export default function Strategies() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-text-secondary mb-1.5">
                   Reduction Amount ({newRule.reduction_type === 'percentage' ? '%' : '$'})
                 </label>
                 <input
@@ -365,12 +316,12 @@ export default function Strategies() {
                   max={newRule.reduction_type === 'percentage' ? "50" : "999"}
                   value={newRule.reduction_amount}
                   onChange={(e) => setNewRule(prev => ({ ...prev, reduction_amount: parseInt(e.target.value) || 1 }))}
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full bg-dark-bg border border-dark-border rounded-lg px-3 py-2.5 text-text-primary focus:ring-2 focus:ring-accent focus:border-transparent transition-colors"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Frequency (Days)</label>
+                <label className="block text-sm font-medium text-text-secondary mb-1.5">Frequency (Days)</label>
                 <input
                   type="number"
                   min="1"
@@ -378,9 +329,9 @@ export default function Strategies() {
                   value={newRule.frequency_days}
                   onChange={(e) => setNewRule(prev => ({ ...prev, frequency_days: parseInt(e.target.value) || 1 }))}
                   placeholder="Enter number of days (e.g., 7)"
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500"
+                  className="w-full bg-dark-bg border border-dark-border rounded-lg px-3 py-2.5 text-text-primary placeholder-text-tertiary focus:ring-2 focus:ring-accent focus:border-transparent transition-colors"
                 />
-                <p className="text-xs text-gray-500 mt-1">Enter any number from 1 to 365 days</p>
+                <p className="text-xs text-text-tertiary mt-1">Enter any number from 1 to 365 days</p>
               </div>
             </div>
 
@@ -388,13 +339,13 @@ export default function Strategies() {
               <button
                 onClick={handleCreateRule}
                 disabled={!newRule.name.trim()}
-                className="flex-1 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex-1 bg-accent text-white px-4 py-2.5 rounded-lg hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
               >
                 Create Rule
               </button>
               <button
                 onClick={resetModal}
-                className="px-4 py-2 border border-gray-300 text-gray-700 rounded hover:bg-gray-50"
+                className="px-4 py-2.5 border border-dark-border text-text-secondary rounded-lg hover:bg-dark-hover transition-colors"
               >
                 Cancel
               </button>
@@ -406,13 +357,12 @@ export default function Strategies() {
   )
 }
 
-// Edit Rule Form Component
 function EditRuleForm({ rule, onSave, onCancel, showNotification }) {
   const [editData, setEditData] = useState({
     name: rule.name,
-    reduction_type: rule.reduction_type,
-    reduction_amount: rule.reduction_amount,
-    frequency_days: rule.frequency_days
+    reduction_type: rule.reduction_type || 'percentage',
+    reduction_amount: rule.reduction_amount || 0,
+    frequency_days: rule.frequency_days || 7
   })
 
   const handleSave = () => {
@@ -435,20 +385,20 @@ function EditRuleForm({ rule, onSave, onCancel, showNotification }) {
     <div className="space-y-4">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Rule Name</label>
+          <label className="block text-sm font-medium text-text-secondary mb-1.5">Rule Name</label>
           <input
             type="text"
             value={editData.name}
             onChange={(e) => setEditData(prev => ({ ...prev, name: e.target.value }))}
-            className="w-full border border-gray-300 rounded-md px-3 py-2"
+            className="w-full bg-dark-bg border border-dark-border rounded-lg px-3 py-2.5 text-text-primary focus:ring-2 focus:ring-accent focus:border-transparent"
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Reduction Type</label>
+          <label className="block text-sm font-medium text-text-secondary mb-1.5">Reduction Type</label>
           <select
             value={editData.reduction_type}
             onChange={(e) => setEditData(prev => ({ ...prev, reduction_type: e.target.value }))}
-            className="w-full border border-gray-300 rounded-md px-3 py-2"
+            className="w-full bg-dark-bg border border-dark-border rounded-lg px-3 py-2.5 text-text-primary focus:ring-2 focus:ring-accent focus:border-transparent"
           >
             <option value="percentage">Percentage (%)</option>
             <option value="dollar">Dollar Amount ($)</option>
@@ -458,7 +408,7 @@ function EditRuleForm({ rule, onSave, onCancel, showNotification }) {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-sm font-medium text-text-secondary mb-1.5">
             Reduction Amount ({editData.reduction_type === 'percentage' ? '%' : '$'})
           </label>
           <input
@@ -466,11 +416,11 @@ function EditRuleForm({ rule, onSave, onCancel, showNotification }) {
             min="1"
             value={editData.reduction_amount}
             onChange={(e) => setEditData(prev => ({ ...prev, reduction_amount: parseInt(e.target.value) || 1 }))}
-            className="w-full border border-gray-300 rounded-md px-3 py-2"
+            className="w-full bg-dark-bg border border-dark-border rounded-lg px-3 py-2.5 text-text-primary focus:ring-2 focus:ring-accent focus:border-transparent"
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Frequency (Days)</label>
+          <label className="block text-sm font-medium text-text-secondary mb-1.5">Frequency (Days)</label>
           <input
             type="number"
             min="1"
@@ -478,7 +428,7 @@ function EditRuleForm({ rule, onSave, onCancel, showNotification }) {
             value={editData.frequency_days}
             onChange={(e) => setEditData(prev => ({ ...prev, frequency_days: parseInt(e.target.value) || 1 }))}
             placeholder="Enter number of days"
-            className="w-full border border-gray-300 rounded-md px-3 py-2"
+            className="w-full bg-dark-bg border border-dark-border rounded-lg px-3 py-2.5 text-text-primary placeholder-text-tertiary focus:ring-2 focus:ring-accent focus:border-transparent"
           />
         </div>
       </div>
@@ -486,13 +436,13 @@ function EditRuleForm({ rule, onSave, onCancel, showNotification }) {
       <div className="flex space-x-3">
         <button
           onClick={handleSave}
-          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+          className="bg-success/10 text-success border border-success/30 px-4 py-2 rounded-lg hover:bg-success/20 transition-colors font-medium"
         >
           Save Changes
         </button>
         <button
           onClick={onCancel}
-          className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700"
+          className="bg-dark-hover text-text-secondary px-4 py-2 rounded-lg hover:bg-dark-border transition-colors"
         >
           Cancel
         </button>
