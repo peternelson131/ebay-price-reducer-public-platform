@@ -531,7 +531,23 @@ exports.handler = async (event, context) => {
   
   try {
     const body = event.body ? JSON.parse(event.body) : {};
-    const { userId, source, testSecret, limit, maxListings, internalScheduled } = body;
+    let { userId, source, testSecret, limit, maxListings, internalScheduled } = body;
+    
+    // Extract user ID from JWT token if present (frontend auth)
+    const authHeader = event.headers?.authorization || event.headers?.Authorization;
+    if (authHeader?.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      try {
+        // Verify JWT with Supabase and get user
+        const { data: { user }, error } = await supabase.auth.getUser(token);
+        if (!error && user?.id) {
+          userId = user.id;
+          console.log(`🔐 Authenticated via JWT: ${user.email}`);
+        }
+      } catch (jwtError) {
+        console.warn('JWT verification failed:', jwtError.message);
+      }
+    }
     
     // Auth check
     const isTestMode = testSecret === 'uat-test-2026';
