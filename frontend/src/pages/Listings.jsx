@@ -1,31 +1,67 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
-import { listingsAPI, userAPI } from '../lib/supabase'
-import apiService, { getEbayAuthUrl, getEbayConnectionStatus } from '../services/api'
+import { listingsAPI, userAPI, supabase } from '../lib/supabase'
+import apiService from '../services/api'
 import { getActiveStrategies, getStrategyById, getStrategyDisplayName, getStrategyDisplayInfo } from '../data/strategies'
+import { Search, X, AlertCircle, Plus, Filter, RefreshCw, Palmtree } from 'lucide-react'
 
 // Helper functions for localStorage
+const VALID_COLUMNS = [
+  'image', 'title', 'quantity', 'currentPrice', 'minimumPrice',
+  'priceReductionEnabled', 'strategy', 'listingAge', 'actions'
+]
+
 const getStoredColumnOrder = () => {
   try {
     const stored = localStorage.getItem('listings-column-order')
     if (stored) {
-      return JSON.parse(stored)
+      const parsed = JSON.parse(stored)
+      // Filter out invalid columns (like viewCount, watchCount, suggestedPrice)
+      const filtered = parsed.filter(col => VALID_COLUMNS.includes(col))
+      // If filtering removed columns, return default to ensure all valid columns are present
+      if (filtered.length !== parsed.length || filtered.length !== VALID_COLUMNS.length) {
+        return VALID_COLUMNS
+      }
+      return filtered
     }
   } catch (error) {
     console.warn('Failed to load column order from localStorage:', error)
   }
-  return [
-    'image', 'title', 'quantity', 'currentPrice', 'suggestedPricing', 'minimumPrice',
-    'priceReductionEnabled', 'strategy', 'viewCount', 'watchCount', 'listingAge', 'actions'
-  ]
+  return VALID_COLUMNS
 }
 
 const getStoredVisibleColumns = () => {
   try {
     const stored = localStorage.getItem('listings-visible-columns')
     if (stored) {
-      return JSON.parse(stored)
+      const parsed = JSON.parse(stored)
+      // Filter out invalid columns and create new object with only valid columns
+      const filtered = {}
+      let hasInvalidColumns = false
+
+      for (const col of VALID_COLUMNS) {
+        if (col in parsed) {
+          filtered[col] = parsed[col]
+        } else {
+          filtered[col] = true // Default to visible if not in stored config
+        }
+      }
+
+      // Check if there were any invalid columns in the stored config
+      for (const col in parsed) {
+        if (!VALID_COLUMNS.includes(col)) {
+          hasInvalidColumns = true
+          break
+        }
+      }
+
+      // If we found invalid columns, clean up localStorage
+      if (hasInvalidColumns) {
+        localStorage.setItem('listings-visible-columns', JSON.stringify(filtered))
+      }
+
+      return filtered
     }
   } catch (error) {
     console.warn('Failed to load visible columns from localStorage:', error)
@@ -35,12 +71,9 @@ const getStoredVisibleColumns = () => {
     title: true,
     quantity: true,
     currentPrice: true,
-    suggestedPricing: true,
     minimumPrice: true,
     priceReductionEnabled: true,
     strategy: true,
-    viewCount: true,
-    watchCount: true,
     listingAge: true,
     actions: true
   }
@@ -73,11 +106,52 @@ export default function Listings() {
   const [notification, setNotification] = useState(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(getStoredItemsPerPage())
+  const [isSyncing, setIsSyncing] = useState(false)
   const queryClient = useQueryClient()
 
   const showNotification = (type, message) => {
     setNotification({ type, message })
     setTimeout(() => setNotification(null), 5000)
+  }
+
+  const handleSyncEbay = async () => {
+    setIsSyncing(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) {
+        showNotification('error', 'Please log in to sync listings')
+        return
+      }
+
+      const response = await fetch('/.netlify/functions/sync-ebay-listings', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || data.message || 'Sync failed')
+      }
+
+      if (data.success && data.summary) {
+        const { totalImported, totalUpdated } = data.summary
+        showNotification('success', `Synced ${totalImported} listings (${totalUpdated} updated)`)
+        // Refresh the listings data
+        queryClient.invalidateQueries(['listings'])
+      } else {
+        showNotification('success', 'Sync completed')
+        queryClient.invalidateQueries(['listings'])
+      }
+    } catch (error) {
+      console.error('Sync error:', error)
+      showNotification('error', `Sync failed: ${error.message}`)
+    } finally {
+      setIsSyncing(false)
+    }
   }
 
   // Save column order to localStorage when it changes
@@ -149,26 +223,65 @@ export default function Listings() {
     }
   )
 
-  const reducePriceMutation = useMutation(
-    ({ listingId, customPrice }) => listingsAPI.recordPriceReduction(listingId, customPrice, 'manual'),
+  // Fetch vacation mode status
+  const { data: vacationMode, isLoading: isVacationLoading } = useQuery(
+    ['vacationMode'],
+    async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return false
+      const { data } = await supabase
+        .from('users')
+        .select('vacation_mode')
+        .eq('id', user.id)
+        .single()
+      return data?.vacation_mode || false
+    },
     {
-      onSuccess: (data, { listingId }) => {
-        showNotification('success', `Price reduced to $${data.current_price}`)
-        queryClient.invalidateQueries('listings')
+      retry: 1,
+      refetchOnWindowFocus: false,
+      staleTime: 60 * 1000
+    }
+  )
+
+  // Toggle vacation mode mutation
+  const toggleVacationMutation = useMutation(
+    async (newValue) => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('Not logged in')
+      const { error } = await supabase
+        .from('users')
+        .update({ 
+          vacation_mode: newValue,
+          vacation_mode_since: newValue ? new Date().toISOString() : null
+        })
+        .eq('id', user.id)
+      if (error) throw error
+      return newValue
+    },
+    {
+      onSuccess: (newValue) => {
+        queryClient.setQueryData(['vacationMode'], newValue)
+        showNotification('success', newValue 
+          ? '🏖️ Vacation mode ON - price reductions paused'
+          : '✅ Vacation mode OFF - price reductions will resume'
+        )
       },
       onError: (error) => {
-        showNotification('error', error.message || 'Failed to reduce price')
+        showNotification('error', `Failed to toggle vacation mode: ${error.message}`)
       }
     }
   )
 
+  // Removed: Manual price reduction feature
+  // const reducePriceMutation = useMutation(...)
+
   const endListingMutation = useMutation(listingsAPI.endListing, {
     onSuccess: () => {
-      showNotification('success', 'Listing ended successfully on eBay')
+      showNotification('success', 'Listing closed successfully')
       queryClient.invalidateQueries('listings')
     },
     onError: (error) => {
-      showNotification('error', error.message || 'Failed to end listing on eBay')
+      showNotification('error', error.message || 'Failed to close listing')
     }
   })
 
@@ -212,7 +325,9 @@ export default function Listings() {
   )
 
   const updateStrategyMutation = useMutation(
-    ({ listingId, strategyId, userId }) => apiService.updateListingStrategy(listingId, strategyId, userId),
+    ({ listingId, strategyId }) => listingsAPI.updateListing(listingId, {
+      strategy_id: strategyId || null
+    }),
     {
       onMutate: async ({ listingId, strategyId }) => {
         await queryClient.cancelQueries(['listings', { status }])
@@ -222,7 +337,7 @@ export default function Listings() {
           if (!old) return old
           return old.map(listing =>
             listing.id === listingId
-              ? { ...listing, strategy_id: strategyId, reduction_strategy: strategyId }
+              ? { ...listing, strategy_id: strategyId }
               : listing
           )
         })
@@ -230,7 +345,10 @@ export default function Listings() {
         return { previousListings }
       },
       onSuccess: (data) => {
-        showNotification('success', `Strategy updated to ${data.strategy.name}`)
+        const strategyName = data.strategy_id
+          ? strategies.find(s => s.id === data.strategy_id)?.name || 'selected strategy'
+          : 'No strategy';
+        showNotification('success', `Strategy updated to ${strategyName}`)
       },
       onError: (error, variables, context) => {
         if (context?.previousListings) {
@@ -245,7 +363,7 @@ export default function Listings() {
   )
 
   const togglePriceReductionMutation = useMutation(
-    ({ itemId, userId, enabled, listingId }) => apiService.togglePriceReduction(itemId, userId, enabled),
+    ({ listingId, enabled }) => listingsAPI.updateListing(listingId, { enable_auto_reduction: enabled }),
     {
       onMutate: async ({ listingId, enabled }) => {
         await queryClient.cancelQueries(['listings', { status }])
@@ -255,7 +373,7 @@ export default function Listings() {
           if (!old) return old
           return old.map(listing =>
             listing.id === listingId
-              ? { ...listing, price_reduction_enabled: enabled }
+              ? { ...listing, enable_auto_reduction: enabled }
               : listing
           )
         })
@@ -277,77 +395,9 @@ export default function Listings() {
     }
   )
 
-  const acceptSuggestedPriceMutation = useMutation(
-    ({ listingId, suggestedPrice, priceType }) => {
-      // If accepting average price: update current_price and set minimum to 80%
-      // If accepting minimum price: only update minimum_price (don't touch current price)
-      const updates = priceType === 'average'
-        ? {
-            current_price: suggestedPrice,
-            minimum_price: suggestedPrice * 0.8
-          }
-        : {
-            minimum_price: suggestedPrice
-          };
-
-      return listingsAPI.updateListing(listingId, updates);
-    },
-    {
-      onMutate: async ({ listingId, suggestedPrice, priceType }) => {
-        await queryClient.cancelQueries(['listings', { status }])
-        const previousListings = queryClient.getQueryData(['listings', { status }])
-
-        const updates = priceType === 'average'
-          ? {
-              current_price: suggestedPrice,
-              minimum_price: suggestedPrice * 0.8
-            }
-          : {
-              minimum_price: suggestedPrice
-            };
-
-        queryClient.setQueryData(['listings', { status }], (old) => {
-          if (!old) return old
-          return old.map(listing =>
-            listing.id === listingId
-              ? { ...listing, ...updates }
-              : listing
-          )
-        })
-
-        return { previousListings }
-      },
-      onSuccess: (data, { suggestedPrice, priceType }) => {
-        const message = priceType === 'average'
-          ? `Current price updated to $${suggestedPrice.toFixed(2)} (min: $${(suggestedPrice * 0.8).toFixed(2)})`
-          : `Minimum price set to $${suggestedPrice.toFixed(2)}`;
-        showNotification('success', message)
-      },
-      onError: (error, variables, context) => {
-        if (context?.previousListings) {
-          queryClient.setQueryData(['listings', { status }], context.previousListings)
-        }
-        showNotification('error', error.message || 'Failed to update price')
-      },
-      onSettled: () => {
-        queryClient.invalidateQueries(['listings', { status }])
-      }
-    }
-  )
-
-  const handleReducePrice = (listingId, minimumPrice) => {
-    // Check if minimum price is set
-    if (!minimumPrice || minimumPrice <= 0) {
-      showNotification('error', 'Please set a minimum price before reducing prices')
-      return
-    }
-    if (window.confirm('Are you sure you want to reduce the price now?')) {
-      reducePriceMutation.mutate({ listingId, customPrice: null })
-    }
-  }
 
   const handleDeleteListing = (listingId) => {
-    if (window.confirm('Are you sure you want to close this listing on eBay? This action cannot be undone.')) {
+    if (window.confirm('Are you sure you want to close this listing? This will mark it as closed in your local database.')) {
       endListingMutation.mutate(listingId)
     }
   }
@@ -357,7 +407,7 @@ export default function Listings() {
     // In other views: close only sold-out listings (quantity = 0)
     const listingsToClose = status === 'Ended'
       ? sortedAndFilteredListings
-      : sortedAndFilteredListings.filter(listing => listing.quantity === 0)
+      : sortedAndFilteredListings.filter(listing => listing.quantity_available === 0)
 
     if (listingsToClose.length === 0) {
       showNotification('info', 'No listings to close')
@@ -365,7 +415,7 @@ export default function Listings() {
     }
 
     const listingType = status === 'Ended' ? 'ended' : 'sold-out'
-    const confirmMessage = `Close ${listingsToClose.length} ${listingType} listing(s)? This action cannot be undone.`
+    const confirmMessage = `Close ${listingsToClose.length} ${listingType} listing(s)? This will mark them as closed in your local database.`
     if (!window.confirm(confirmMessage)) {
       return
     }
@@ -394,7 +444,7 @@ export default function Listings() {
         // Store error details for reporting
         const errorMsg = error.message || 'Unknown error'
         errors.push({
-          sku: listing.sku || listing.ebay_item_id,
+          sku: listing.ebay_sku || listing.ebay_item_id,
           error: errorMsg
         })
       }
@@ -431,21 +481,15 @@ export default function Listings() {
   }
 
   const handleStrategyUpdate = (listingId, strategyId) => {
-    if (!userProfile?.id) {
-      showNotification('error', 'User not authenticated')
-      return
-    }
-
     updateStrategyMutation.mutate({
       listingId,
-      strategyId,
-      userId: userProfile.id
+      strategyId: strategyId || null
     })
   }
 
   const handleTogglePriceReduction = (listing) => {
     // Prevent enabling price reduction if minimum price is not set
-    if (!listing.price_reduction_enabled && (!listing.minimum_price || listing.minimum_price <= 0)) {
+    if (!listing.enable_auto_reduction && (!listing.minimum_price || listing.minimum_price <= 0)) {
       showNotification('error', 'Please set a minimum price before enabling price reduction')
       return
     }
@@ -456,79 +500,11 @@ export default function Listings() {
     }
 
     togglePriceReductionMutation.mutate({
-      itemId: listing.ebay_item_id,
-      userId: userProfile.id,
-      enabled: !listing.price_reduction_enabled,
-      listingId: listing.id // Keep for optimistic updates
+      listingId: listing.id,
+      enabled: !listing.enable_auto_reduction
     })
   }
 
-  const handleAcceptSuggestedPrice = (listingId, suggestedPrice, priceType) => {
-    const message = priceType === 'average'
-      ? `Update current listing price to $${suggestedPrice.toFixed(2)}?\n(This will also set minimum price to $${(suggestedPrice * 0.8).toFixed(2)})`
-      : `Set minimum price to $${suggestedPrice.toFixed(2)}?\n(Current listing price will NOT change)`;
-
-    if (window.confirm(message)) {
-      acceptSuggestedPriceMutation.mutate({ listingId, suggestedPrice, priceType })
-    }
-  }
-
-  const handleConnectEbay = () => {
-    // Navigate to Account page with integrations tab active
-    navigate('/account?tab=integrations')
-  }
-
-  const handleSyncFromEbay = async () => {
-    try {
-      setNotification({ type: 'info', message: 'Syncing listings from eBay...' })
-
-      const { supabase } = await import('../lib/supabase')
-      const { data: { session } } = await supabase.auth.getSession()
-
-      if (!session?.access_token) {
-        throw new Error('Not authenticated')
-      }
-
-      const response = await fetch('/.netlify/functions/trigger-sync', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json'
-        }
-      })
-
-      // Handle non-JSON responses (like HTML error pages)
-      if (!response.ok) {
-        let errorMessage = 'Sync failed'
-        try {
-          const result = await response.json()
-          errorMessage = result.message || result.error || errorMessage
-        } catch (jsonError) {
-          // Response wasn't JSON (probably HTML error page)
-          const text = await response.text()
-          console.error('Non-JSON error response:', text.substring(0, 500))
-          errorMessage = `Server error (${response.status}). Please try again or check your eBay connection.`
-        }
-        throw new Error(errorMessage)
-      }
-
-      const result = await response.json()
-
-      setNotification({
-        type: 'success',
-        message: `Successfully synced ${result.count} listings from eBay!`
-      })
-
-      // Refresh the listings
-      refetch()
-    } catch (error) {
-      console.error('Sync error:', error)
-      setNotification({
-        type: 'error',
-        message: error.message || 'Failed to sync listings'
-      })
-    }
-  }
 
   const handleSort = (key) => {
     let direction = 'asc'
@@ -583,11 +559,6 @@ export default function Listings() {
     return `${diffDays} days`
   }
 
-  const calculateSuggestedPrice = (currentPrice, originalPrice) => {
-    const reduction = Math.max(0.05, Math.random() * 0.15)
-    return (currentPrice * (1 - reduction)).toFixed(2)
-  }
-
   // First, filter listings without sorting
   const filteredListings = useMemo(() => {
     let filtered = listings || []
@@ -606,10 +577,10 @@ export default function Listings() {
 
         return (
           listing.title?.toLowerCase().includes(searchLower) ||
-          listing.sku?.toLowerCase().includes(searchLower) ||
+          listing.ebay_sku?.toLowerCase().includes(searchLower) ||
           listing.current_price?.toString().includes(searchLower) ||
           listing.original_price?.toString().includes(searchLower) ||
-          listing.quantity?.toString().includes(searchLower) ||
+          listing.quantity_available?.toString().includes(searchLower) ||
           listing.minimum_price?.toString().includes(searchLower) ||
           strategyName.toLowerCase().includes(searchLower) ||
           listing.id?.toLowerCase().includes(searchLower)
@@ -625,13 +596,17 @@ export default function Listings() {
 
           let listingValue
           if (filter.field === 'strategy') {
-            listingValue = listing.reduction_strategy
+            // Handle "No Strategy" filter
+            if (filter.value === 'none') {
+              return !listing.strategy_id
+            }
+            listingValue = listing.strategy_id
           } else if (filter.field === 'listing_age') {
             const created = new Date(listing.created_at || new Date())
             const now = new Date()
             listingValue = Math.ceil((now - created) / (1000 * 60 * 60 * 24))
-          } else if (filter.field === 'price_reduction_enabled') {
-            listingValue = listing.price_reduction_enabled?.toString()
+          } else if (filter.field === 'enable_auto_reduction') {
+            listingValue = listing.enable_auto_reduction?.toString()
           } else {
             listingValue = listing[filter.field]
           }
@@ -763,14 +738,17 @@ export default function Listings() {
 
   // Filter configuration
   const filterOptions = [
-    { key: 'strategy', label: 'Strategy', type: 'select', options: strategies.map(s => ({ value: s.id, label: s.name })) },
+    { key: 'strategy', label: 'Strategy', type: 'select', options: [
+      { value: 'none', label: 'No Strategy' },
+      ...strategies.map(s => ({ value: s.id, label: s.name }))
+    ]},
     { key: 'current_price', label: 'Current Price', type: 'number' },
     { key: 'original_price', label: 'Original Price', type: 'number' },
     { key: 'quantity', label: 'Quantity', type: 'number' },
     { key: 'minimum_price', label: 'Minimum Price', type: 'number' },
     { key: 'listing_age', label: 'Listing Age (days)', type: 'number' },
     { key: 'sku', label: 'SKU', type: 'text' },
-    { key: 'price_reduction_enabled', label: 'Monitoring Status', type: 'select', options: [
+    { key: 'enable_auto_reduction', label: 'Monitoring Status', type: 'select', options: [
       { value: 'true', label: 'Active' },
       { value: 'false', label: 'Paused' }
     ]}
@@ -803,18 +781,15 @@ export default function Listings() {
   // Column configuration
   const getColumnConfig = (column) => {
     const configs = {
-      image: { label: 'Image', sortable: false, width: 'w-20 lg:w-24' },
-      title: { label: 'Title', sortable: true, sortKey: 'title', width: 'w-1/3 lg:w-2/5' },
-      quantity: { label: 'Quantity', sortable: true, sortKey: 'quantity', width: 'w-16 lg:w-20' },
-      currentPrice: { label: 'Current Price', sortable: true, sortKey: 'current_price', width: 'w-24 lg:w-28' },
-      suggestedPricing: { label: 'Suggested Pricing', sortable: false, width: 'w-56 lg:w-64' },
-      minimumPrice: { label: 'Minimum Price', sortable: false, width: 'w-24 lg:w-28' },
-      priceReductionEnabled: { label: 'Price Reduction', sortable: true, sortKey: 'price_reduction_enabled', width: 'w-32 lg:w-36' },
-      strategy: { label: 'Strategy', sortable: false, width: 'w-40 lg:w-48' },
-      viewCount: { label: 'Views', sortable: true, sortKey: 'view_count', width: 'w-20 lg:w-24' },
-      watchCount: { label: 'Watchers', sortable: true, sortKey: 'watch_count', width: 'w-20 lg:w-24' },
-      listingAge: { label: 'Listing Age', sortable: true, sortKey: 'created_at', width: 'w-20 lg:w-24' },
-      actions: { label: 'Actions', sortable: false, width: 'w-40 lg:w-44' }
+      image: { label: 'Image', sortable: false, width: 'min-w-[80px] w-20' },
+      title: { label: 'Title', sortable: true, sortKey: 'title', width: 'min-w-[200px]' },
+      quantity: { label: 'Qty', sortable: true, sortKey: 'quantity', width: 'min-w-[60px] w-16' },
+      currentPrice: { label: 'Current Price', sortable: true, sortKey: 'current_price', width: 'min-w-[100px] w-28' },
+      minimumPrice: { label: 'Min Price', sortable: false, width: 'min-w-[90px] w-24' },
+      priceReductionEnabled: { label: 'Price Reduction', sortable: true, sortKey: 'enable_auto_reduction', width: 'min-w-[120px] w-32' },
+      strategy: { label: 'Strategy', sortable: false, width: 'min-w-[140px] w-40' },
+      listingAge: { label: 'Age', sortable: true, sortKey: 'created_at', width: 'min-w-[70px] w-20' },
+      actions: { label: 'Actions', sortable: false, width: 'min-w-[120px] w-32' }
     }
     return configs[column] || { label: column, sortable: false }
   }
@@ -893,78 +868,36 @@ export default function Listings() {
     <div className="space-y-4">
       {/* Notification Banner */}
       {notification && (
-        <div className={`rounded-md p-3 ${
+        <div className={`rounded-lg p-3 border ${
           notification.type === 'success'
-            ? 'bg-blue-50 border border-blue-200'
-            : 'bg-red-50 border border-red-200'
+            ? 'bg-success/10 border-success/30 text-success'
+            : 'bg-error/10 border-error/30 text-error'
         }`}>
           <div className="flex">
-            <div className={`${
-              notification.type === 'success' ? 'text-blue-800' : 'text-red-800'
-            }`}>
+            <div>
               {notification.message}
             </div>
           </div>
         </div>
       )}
 
-      {/* eBay Connection Banner */}
-      {userProfile && userProfile.ebay_connection_status !== 'connected' && (
-        <div className="rounded-md p-4 bg-yellow-50 border border-yellow-200">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center">
-              <div className="text-yellow-800">
-                <svg className="w-5 h-5 mr-2 inline" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                </svg>
-                <strong>Connect Your eBay Account</strong>
-                <div className="mt-1 text-sm">
-                  You need to connect your eBay account to import and manage your listings automatically.
-                </div>
-              </div>
-            </div>
-            <button
-              onClick={handleConnectEbay}
-              className="bg-yellow-600 text-white px-4 py-2 rounded hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-yellow-500"
-            >
-              Connect eBay Account
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Header */}
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Your eBay Listings</h1>
-          <p className="text-gray-600">Manage and monitor your eBay listing prices</p>
-        </div>
-        <button
-          onClick={handleSyncFromEbay}
-          disabled={isLoading}
-          className={`px-4 py-2 rounded text-white ${
-            isLoading
-              ? 'bg-gray-400 cursor-not-allowed'
-              : 'bg-blue-600 hover:bg-blue-700'
-          }`}
-        >
-          {isLoading ? 'Loading...' : 'Import from eBay'}
-        </button>
+      <div>
+        <h1 className="text-2xl font-semibold text-text-primary">Your eBay Listings</h1>
+        <p className="text-text-secondary">Manage and monitor your eBay listing prices</p>
       </div>
 
       {/* Search Box */}
-      <div className="bg-white rounded-lg shadow p-4">
+      <div className="bg-dark-surface rounded-lg border border-dark-border p-4">
         <div className="relative">
           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <svg className="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-            </svg>
+            <Search className="h-5 w-5 text-text-tertiary" strokeWidth={1.5} />
           </div>
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+            className="block w-full pl-10 pr-3 py-2 border border-dark-border rounded-lg bg-dark-bg text-text-primary placeholder-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent"
             placeholder="Search listings by title, SKU, price, quantity, strategy, or any data..."
           />
           {searchTerm && (
@@ -972,14 +905,12 @@ export default function Listings() {
               onClick={() => setSearchTerm('')}
               className="absolute inset-y-0 right-0 pr-3 flex items-center"
             >
-              <svg className="h-5 w-5 text-gray-400 hover:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
-              </svg>
+              <X className="h-5 w-5 text-text-tertiary hover:text-text-primary transition-colors" strokeWidth={1.5} />
             </button>
           )}
         </div>
         {searchTerm && (
-          <div className="mt-2 text-sm text-gray-600">
+          <div className="mt-2 text-sm text-text-secondary">
             {totalItems} listing{totalItems !== 1 ? 's' : ''} found
           </div>
         )}
@@ -989,25 +920,54 @@ export default function Listings() {
       <div className="space-y-4 lg:space-y-0 lg:flex lg:justify-between lg:items-center">
         {/* Status Filter */}
         <div className="flex flex-wrap gap-2 justify-center lg:justify-start">
-          {['Active', 'Ended', 'all'].map((statusOption) => (
+          {['Active'].map((statusOption) => (
             <button
               key={statusOption}
               onClick={() => setStatus(statusOption)}
-              className={`px-3 py-2 rounded text-sm font-medium flex-shrink-0 ${
+              className={`px-3 py-2 rounded-lg text-sm font-medium flex-shrink-0 transition-colors ${
                 status === statusOption
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                  ? 'bg-accent text-white'
+                  : 'bg-dark-surface text-text-secondary border border-dark-border hover:bg-dark-hover hover:text-text-primary'
               }`}
             >
               {statusOption === 'all' ? 'All' : statusOption}
             </button>
           ))}
 
+          {/* Sync eBay Button */}
+          <button
+            onClick={handleSyncEbay}
+            disabled={isSyncing}
+            className={`px-3 py-2 rounded-lg text-sm font-medium flex-shrink-0 transition-colors flex items-center gap-2 ${
+              isSyncing
+                ? 'bg-accent/50 text-white cursor-not-allowed'
+                : 'bg-accent text-white hover:bg-accent-hover'
+            }`}
+          >
+            <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} strokeWidth={2} />
+            <span>{isSyncing ? 'Syncing...' : 'Sync eBay'}</span>
+          </button>
+
+          {/* Vacation Mode Toggle */}
+          <button
+            onClick={() => toggleVacationMutation.mutate(!vacationMode)}
+            disabled={toggleVacationMutation.isLoading || isVacationLoading}
+            className={`px-3 py-2 rounded-lg text-sm font-medium flex-shrink-0 transition-colors flex items-center gap-2 ${
+              vacationMode
+                ? 'bg-warning/20 text-warning border border-warning/30 hover:bg-warning/30'
+                : 'bg-dark-surface text-text-secondary border border-dark-border hover:bg-dark-hover hover:text-text-primary'
+            }`}
+            title={vacationMode ? 'Click to resume price reductions' : 'Click to pause price reductions'}
+          >
+            <Palmtree className="h-4 w-4" strokeWidth={2} />
+            <span>{vacationMode ? 'Vacation: ON' : 'Vacation: OFF'}</span>
+          </button>
+
           {/* Bulk Close Button - Show when closeable listings exist */}
           {(() => {
             const closeableListings = status === 'Ended'
               ? sortedAndFilteredListings // All ended listings
-              : sortedAndFilteredListings.filter(l => l.quantity === 0); // Only sold-out in other views
+              : sortedAndFilteredListings.filter(l => l.quantity_available === 0); // Only sold-out in other views
 
             const buttonText = status === 'Ended'
               ? `Close All Ended (${closeableListings.length})`
@@ -1016,8 +976,8 @@ export default function Listings() {
             return closeableListings.length > 0 && (
               <button
                 onClick={handleBulkCloseSoldOut}
-                className="bg-red-600 text-white px-3 py-2 rounded text-sm font-medium hover:bg-red-700 flex items-center gap-1 flex-shrink-0"
-                title={status === 'Ended' ? 'Close all ended listings' : 'Close all sold-out listings on eBay'}
+                className="bg-error/10 text-error border border-error/30 px-3 py-2 rounded-lg text-sm font-medium hover:bg-error/20 flex items-center gap-1 flex-shrink-0 transition-colors"
+                title={status === 'Ended' ? 'Close all ended listings' : 'Close all sold-out listings'}
               >
                 <span>{buttonText}</span>
               </button>
@@ -1030,18 +990,17 @@ export default function Listings() {
           {/* Add Filter Button */}
           <button
             onClick={addFilter}
-            className="bg-green-100 text-green-800 px-3 py-2 rounded text-sm hover:bg-green-200 flex items-center space-x-1 flex-shrink-0"
+            className="bg-success/10 text-success border border-success/30 px-3 py-2 rounded-lg text-sm hover:bg-success/20 flex items-center space-x-1.5 flex-shrink-0 transition-colors"
           >
-            <span>+</span>
+            <Filter className="h-4 w-4" strokeWidth={1.5} />
             <span className="hidden sm:inline">Add Filter</span>
-            <span className="sm:hidden">Filter</span>
           </button>
 
           {/* Clear Filters Button */}
           {filters.length > 0 && (
             <button
               onClick={clearAllFilters}
-              className="bg-red-100 text-red-800 px-3 py-2 rounded text-sm hover:bg-red-200 flex-shrink-0"
+              className="bg-error/10 text-error border border-error/30 px-3 py-2 rounded-lg text-sm hover:bg-error/20 flex-shrink-0 transition-colors"
             >
               <span className="hidden sm:inline">Clear All ({filters.length})</span>
               <span className="sm:hidden">Clear ({filters.length})</span>
@@ -1051,20 +1010,20 @@ export default function Listings() {
           {/* Column Visibility Controls - Hidden on mobile since mobile uses cards */}
           <div className="hidden lg:block relative">
             <details className="relative">
-              <summary className="bg-gray-100 px-3 py-2 rounded text-sm cursor-pointer hover:bg-gray-200">
+              <summary className="bg-dark-surface border border-dark-border text-text-secondary px-3 py-2 rounded-lg text-sm cursor-pointer hover:bg-dark-hover hover:text-text-primary transition-colors">
                 Manage Columns
               </summary>
-              <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg border z-10">
+              <div className="absolute right-0 mt-2 w-48 bg-dark-surface rounded-lg border border-dark-border shadow-xl z-10">
                 <div className="p-2">
                   {Object.entries(visibleColumns).map(([column, visible]) => (
-                    <label key={column} className="flex items-center space-x-2 p-1">
+                    <label key={column} className="flex items-center space-x-2 p-2 rounded hover:bg-dark-hover cursor-pointer">
                       <input
                         type="checkbox"
                         checked={visible}
                         onChange={() => toggleColumnVisibility(column)}
-                        className="rounded"
+                        className="rounded bg-dark-bg border-dark-border text-accent focus:ring-accent"
                       />
-                      <span className="text-sm capitalize">{column.replace(/([A-Z])/g, ' $1').trim()}</span>
+                      <span className="text-sm text-text-primary capitalize">{column.replace(/([A-Z])/g, ' $1').trim()}</span>
                     </label>
                   ))}
                 </div>
@@ -1076,8 +1035,8 @@ export default function Listings() {
 
       {/* Active Filters */}
       {filters.length > 0 && (
-        <div className="bg-white rounded-lg shadow p-4">
-          <h3 className="text-sm font-medium text-gray-700 mb-3">Active Filters</h3>
+        <div className="bg-dark-surface rounded-lg border border-dark-border p-4">
+          <h3 className="text-sm font-medium text-text-secondary mb-3">Active Filters</h3>
           <div className="space-y-3">
             {filters.map((filter) => {
               const filterOption = filterOptions.find(opt => opt.key === filter.field)
@@ -1085,13 +1044,13 @@ export default function Listings() {
               const isSelect = filterOption?.type === 'select'
 
               return (
-                <div key={filter.id} className="p-3 bg-gray-50 rounded">
+                <div key={filter.id} className="p-3 bg-dark-bg rounded-lg border border-dark-border">
                   <div className="flex flex-col space-y-3 sm:flex-row sm:space-y-0 sm:space-x-3 sm:items-center">
                     {/* Field Selection */}
                     <select
                       value={filter.field}
                       onChange={(e) => updateFilter(filter.id, { field: e.target.value, operator: 'equals', value: '' })}
-                      className="text-sm border border-gray-300 rounded px-2 py-1 bg-white w-full sm:w-auto"
+                      className="text-sm border border-dark-border rounded-lg px-2 py-1.5 bg-dark-surface text-text-primary w-full sm:w-auto focus:ring-2 focus:ring-accent focus:border-transparent"
                     >
                       <option value="">Select Field</option>
                       {filterOptions.map(option => (
@@ -1104,7 +1063,7 @@ export default function Listings() {
                       <select
                         value={filter.operator}
                         onChange={(e) => updateFilter(filter.id, { operator: e.target.value })}
-                        className="text-sm border border-gray-300 rounded px-2 py-1 bg-white w-full sm:w-auto"
+                        className="text-sm border border-dark-border rounded-lg px-2 py-1.5 bg-dark-surface text-text-primary w-full sm:w-auto focus:ring-2 focus:ring-accent focus:border-transparent"
                       >
                         <option value="equals">=</option>
                         <option value="greater_than">&gt;</option>
@@ -1119,7 +1078,7 @@ export default function Listings() {
                       <select
                         value={filter.operator}
                         onChange={(e) => updateFilter(filter.id, { operator: e.target.value })}
-                        className="text-sm border border-gray-300 rounded px-2 py-1 bg-white w-full sm:w-auto"
+                        className="text-sm border border-dark-border rounded-lg px-2 py-1.5 bg-dark-surface text-text-primary w-full sm:w-auto focus:ring-2 focus:ring-accent focus:border-transparent"
                       >
                         <option value="equals">Equals</option>
                         <option value="contains">Contains</option>
@@ -1133,7 +1092,7 @@ export default function Listings() {
                           <select
                             value={filter.value}
                             onChange={(e) => updateFilter(filter.id, { value: e.target.value })}
-                            className="text-sm border border-gray-300 rounded px-2 py-1 bg-white w-full sm:w-auto"
+                            className="text-sm border border-dark-border rounded-lg px-2 py-1.5 bg-dark-surface text-text-primary w-full sm:w-auto focus:ring-2 focus:ring-accent focus:border-transparent"
                           >
                             <option value="">Select Value</option>
                             {filterOption.options?.map(option => (
@@ -1146,7 +1105,7 @@ export default function Listings() {
                             value={filter.value}
                             onChange={(e) => updateFilter(filter.id, { value: e.target.value })}
                             placeholder={`Enter ${filterOption?.label.toLowerCase()}`}
-                            className="text-sm border border-gray-300 rounded px-2 py-1 bg-white w-full sm:w-auto"
+                            className="text-sm border border-dark-border rounded-lg px-2 py-1.5 bg-dark-surface text-text-primary placeholder-text-tertiary w-full sm:w-auto focus:ring-2 focus:ring-accent focus:border-transparent"
                           />
                         )}
                       </>
@@ -1155,7 +1114,7 @@ export default function Listings() {
                     {/* Remove Filter Button */}
                     <button
                       onClick={() => removeFilter(filter.id)}
-                      className="text-red-600 hover:text-red-800 text-sm p-2 hover:bg-red-50 rounded flex-shrink-0 self-center sm:self-auto"
+                      className="text-error hover:text-error text-sm p-2 hover:bg-error/10 rounded-lg flex-shrink-0 self-center sm:self-auto transition-colors"
                       aria-label="Remove filter"
                     >
                       ✕
@@ -1170,29 +1129,29 @@ export default function Listings() {
 
       {/* Pagination Controls - Top */}
       {totalItems > 0 && (
-        <div className="bg-white rounded-lg shadow p-4">
+        <div className="bg-dark-surface rounded-lg border border-dark-border p-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             {/* Items per page selector */}
             <div className="flex items-center gap-2">
-              <label htmlFor="items-per-page" className="text-sm text-gray-700">
+              <label htmlFor="items-per-page" className="text-sm text-text-secondary">
                 Show:
               </label>
               <select
                 id="items-per-page"
                 value={itemsPerPage}
                 onChange={(e) => handleItemsPerPageChange(e.target.value)}
-                className="border border-gray-300 rounded px-2 py-1 text-sm bg-white"
+                className="border border-dark-border rounded-lg px-2 py-1 text-sm bg-dark-bg text-text-primary focus:ring-2 focus:ring-accent focus:border-transparent"
               >
                 <option value="10">10</option>
                 <option value="25">25</option>
                 <option value="50">50</option>
                 <option value="100">100</option>
               </select>
-              <span className="text-sm text-gray-700">per page</span>
+              <span className="text-sm text-text-secondary">per page</span>
             </div>
 
             {/* Page info */}
-            <div className="text-sm text-gray-700 text-center sm:text-left">
+            <div className="text-sm text-text-secondary text-center sm:text-left">
               Showing {totalItems === 0 ? 0 : startIndex + 1}-{Math.min(startIndex + paginatedListings.length, totalItems)} of {totalItems} listings
             </div>
 
@@ -1202,10 +1161,10 @@ export default function Listings() {
                 <button
                   onClick={() => handlePageChange(currentPage - 1)}
                   disabled={currentPage === 1}
-                  className={`px-3 py-1 rounded text-sm ${
+                  className={`px-3 py-1 rounded-lg text-sm transition-colors ${
                     currentPage === 1
-                      ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                      : 'bg-blue-600 text-white hover:bg-blue-700'
+                      ? 'bg-dark-bg text-text-tertiary cursor-not-allowed'
+                      : 'bg-accent text-white hover:bg-accent-hover'
                   }`}
                 >
                   Previous
@@ -1213,17 +1172,17 @@ export default function Listings() {
 
                 {getPageNumbers().map((page, index) => (
                   page === '...' ? (
-                    <span key={`ellipsis-${index}`} className="px-2 text-gray-500">
+                    <span key={`ellipsis-${index}`} className="px-2 text-text-tertiary">
                       ...
                     </span>
                   ) : (
                     <button
                       key={page}
                       onClick={() => handlePageChange(page)}
-                      className={`px-3 py-1 rounded text-sm ${
+                      className={`px-3 py-1 rounded-lg text-sm transition-colors ${
                         currentPage === page
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          ? 'bg-accent text-white'
+                          : 'bg-dark-bg text-text-secondary hover:bg-dark-hover hover:text-text-primary'
                       }`}
                     >
                       {page}
@@ -1234,10 +1193,10 @@ export default function Listings() {
                 <button
                   onClick={() => handlePageChange(currentPage + 1)}
                   disabled={currentPage === totalPages}
-                  className={`px-3 py-1 rounded text-sm ${
+                  className={`px-3 py-1 rounded-lg text-sm transition-colors ${
                     currentPage === totalPages
-                      ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                      : 'bg-blue-600 text-white hover:bg-blue-700'
+                      ? 'bg-dark-bg text-text-tertiary cursor-not-allowed'
+                      : 'bg-accent text-white hover:bg-accent-hover'
                   }`}
                 >
                   Next
@@ -1251,139 +1210,93 @@ export default function Listings() {
       {/* Mobile Card View (visible on small screens) */}
       <div className="lg:hidden space-y-4">
         {paginatedListings.map((listing) => (
-          <div key={listing.id} className="bg-white rounded-lg shadow p-4">
+          <div key={listing.id} className="bg-dark-surface rounded-lg border border-dark-border p-4">
             <div className="flex items-start space-x-4">
               <img
-                src={listing.image_urls?.[0] || '/placeholder-image.jpg'}
+                src={listing.image_url || '/placeholder-image.jpg'}
                 alt={listing.title}
                 className="w-20 h-20 rounded-lg object-cover flex-shrink-0"
               />
               <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-medium text-gray-900 truncate">{listing.title}</h3>
-                {listing.sku && (
-                  <p className="text-xs text-gray-500 mt-1">SKU: {listing.sku}</p>
+                <h3 className="text-sm font-medium text-text-primary truncate">{listing.title}</h3>
+                {listing.ebay_sku && (
+                  <p className="text-xs text-text-tertiary mt-1">SKU: {listing.ebay_sku}</p>
                 )}
 
                 <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
                   <div>
-                    <span className="text-gray-500">Current Price:</span>
-                    <div className="font-bold text-green-600">${listing.current_price}</div>
+                    <span className="text-text-tertiary">Current Price:</span>
+                    <div className="font-bold text-success">${listing.current_price}</div>
                   </div>
                   <div>
-                    <span className="text-gray-500">Quantity:</span>
-                    <div className="font-medium">{listing.listing_status === 'Ended' ? 0 : (listing.quantity ?? 0)}</div>
+                    <span className="text-text-tertiary">Quantity:</span>
+                    <div className="font-medium text-text-primary">{listing.listing_status === 'Ended' ? 0 : (listing.quantity_available ?? 0)}</div>
                   </div>
                   <div>
-                    <span className="text-gray-500">Views:</span>
-                    <div className="font-medium">{listing.view_count || 0}</div>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Watchers:</span>
-                    <div className="font-medium">{listing.watch_count || 0}</div>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Age:</span>
-                    <div className="font-medium">{calculateListingAge(listing.created_at || new Date())}</div>
+                    <span className="text-text-tertiary">Age:</span>
+                    <div className="font-medium text-text-primary">{calculateListingAge(listing.created_at || new Date())}</div>
                   </div>
                 </div>
 
-                {/* Suggested Pricing Section (Mobile) */}
-                {listing.last_market_analysis && listing.market_competitor_count > 0 && (
-                  <div className="mt-3 pt-3 border-t border-gray-200">
-                    <span className="text-sm text-gray-500 block mb-2">Suggested Pricing:</span>
-
-                    {listing.market_competitor_count < 5 && (
-                      <div className="text-xs text-orange-600 mb-2">
-                        ⚠️ Only {listing.market_competitor_count} competitor{listing.market_competitor_count !== 1 ? 's' : ''} found
-                      </div>
-                    )}
-
-                    <div className="space-y-2">
-                      {listing.market_average_price && (
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm">Avg: <span className="font-medium text-blue-600">${listing.market_average_price.toFixed(2)}</span></span>
-                          <button
-                            onClick={() => handleAcceptSuggestedPrice(listing.id, listing.market_average_price, 'average')}
-                            className="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700"
-                          >
-                            Accept Avg
-                          </button>
-                        </div>
-                      )}
-
-                      {listing.market_lowest_price && (
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm">Min: <span className="font-medium text-green-600">${listing.market_lowest_price.toFixed(2)}</span></span>
-                          <button
-                            onClick={() => handleAcceptSuggestedPrice(listing.id, listing.market_lowest_price, 'minimum')}
-                            className="bg-green-600 text-white px-3 py-1 rounded text-xs hover:bg-green-700"
-                          >
-                            Accept Min
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
 
                 <div className="mt-3 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-500">Minimum Price:</span>
+                    <span className="text-sm text-text-tertiary">Minimum Price:</span>
                     <input
                       type="number"
                       step="0.01"
                       min="0"
                       defaultValue={listing.minimum_price || ''}
                       onBlur={(e) => handleMinimumPriceUpdate(listing.id, e.target.value)}
-                      className="w-24 px-2 py-1 text-sm border border-gray-300 rounded"
+                      className="w-24 px-2 py-1 text-sm border border-dark-border rounded-lg bg-dark-bg text-text-primary placeholder-text-tertiary"
                       placeholder="Set min"
                     />
                   </div>
 
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-500">Price Reduction:</span>
+                    <span className="text-sm text-text-tertiary">Price Reduction:</span>
                     <div className="flex items-center">
                       <label
                         className={`relative inline-flex items-center ${
-                          (!listing.minimum_price || listing.minimum_price <= 0) && !listing.price_reduction_enabled
+                          (!listing.minimum_price || listing.minimum_price <= 0) && !listing.enable_auto_reduction
                             ? 'cursor-not-allowed'
                             : 'cursor-pointer'
                         }`}
-                        title={(!listing.minimum_price || listing.minimum_price <= 0) && !listing.price_reduction_enabled
+                        title={(!listing.minimum_price || listing.minimum_price <= 0) && !listing.enable_auto_reduction
                           ? 'Set a minimum price before enabling price reduction'
                           : ''}
                       >
                         <input
                           type="checkbox"
-                          checked={listing.price_reduction_enabled}
+                          checked={listing.enable_auto_reduction}
                           onChange={() => handleTogglePriceReduction(listing)}
                           disabled={togglePriceReductionMutation.isLoading}
                           className="sr-only"
                         />
                         <div className={`relative w-11 h-6 rounded-full transition-colors duration-200 ease-in-out ${
-                          listing.price_reduction_enabled ? 'bg-blue-600' : 'bg-gray-200'
+                          listing.enable_auto_reduction ? 'bg-accent' : 'bg-dark-border'
                         }`}>
                           <div className={`absolute top-0.5 left-0.5 bg-white w-5 h-5 rounded-full transition-transform duration-200 ease-in-out ${
-                            listing.price_reduction_enabled ? 'translate-x-5' : 'translate-x-0'
+                            listing.enable_auto_reduction ? 'translate-x-5' : 'translate-x-0'
                           }`}></div>
                         </div>
                       </label>
                       <span className={`ml-2 text-xs ${
-                        listing.price_reduction_enabled ? 'text-green-600 font-medium' : 'text-gray-500'
+                        listing.enable_auto_reduction ? 'text-success font-medium' : 'text-text-tertiary'
                       }`}>
-                        {listing.price_reduction_enabled ? 'Active' : 'Paused'}
+                        {listing.enable_auto_reduction ? 'Active' : 'Paused'}
                       </span>
                     </div>
                   </div>
 
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-500">Strategy:</span>
+                    <span className="text-sm text-text-tertiary">Strategy:</span>
                     <select
                       value={listing.strategy_id || listing.reduction_strategy || ''}
                       onChange={(e) => handleStrategyUpdate(listing.id, e.target.value)}
-                      className="text-sm border border-gray-300 rounded px-2 py-1 max-w-32"
+                      className="text-sm border border-dark-border rounded-lg px-2 py-1 max-w-32 bg-dark-bg text-text-primary"
                     >
-                      <option value="">Select Strategy</option>
+                      <option value="">No Strategy</option>
                       {strategies.map((strategy) => (
                         <option key={strategy.id} value={strategy.id}>
                           {strategy.name}
@@ -1395,38 +1308,22 @@ export default function Listings() {
 
                 <div className="mt-4 flex flex-wrap gap-2">
                   <a
-                    href={listing.listing_url || `https://www.ebay.com/itm/${listing.ebay_item_id}`}
+                    href={listing.ebay_url || `https://www.ebay.com/itm/${listing.ebay_item_id}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700 inline-block text-center"
+                    className="bg-accent/10 text-accent border border-accent/30 px-3 py-1 rounded-lg text-xs hover:bg-accent/20 inline-block text-center transition-colors"
                     title="Open this listing on eBay in a new tab"
                   >
                     View on eBay
                   </a>
                   <button
-                    onClick={() => handleReducePrice(listing.id, listing.minimum_price)}
-                    disabled={reducePriceMutation.isLoading || !listing.minimum_price || listing.minimum_price <= 0}
-                    className={`px-3 py-1 rounded text-xs ${
-                      !listing.minimum_price || listing.minimum_price <= 0
-                        ? 'bg-gray-400 text-white cursor-not-allowed opacity-50'
-                        : 'bg-orange-600 text-white hover:bg-orange-700'
-                    } disabled:opacity-50`}
-                    title={!listing.minimum_price || listing.minimum_price <= 0
-                      ? 'Set a minimum price before reducing prices'
-                      : 'Reduce price now'}
+                    onClick={() => handleDeleteListing(listing.id)}
+                    disabled={endListingMutation.isLoading}
+                    className="bg-error/10 text-error border border-error/30 px-3 py-1 rounded-lg text-xs hover:bg-error/20 disabled:opacity-50 transition-colors"
+                    title="Close this listing"
                   >
-                    Reduce Price
+                    Close
                   </button>
-                  {(listing.quantity === 0 || listing.listing_status === 'Ended') && (
-                    <button
-                      onClick={() => handleDeleteListing(listing.id)}
-                      disabled={endListingMutation.isLoading}
-                      className="bg-red-600 text-white px-3 py-1 rounded text-xs hover:bg-red-700 disabled:opacity-50"
-                      title="Close this listing on eBay"
-                    >
-                      Close
-                    </button>
-                  )}
                 </div>
               </div>
             </div>
@@ -1434,37 +1331,19 @@ export default function Listings() {
         ))}
 
         {totalItems === 0 && (
-          <div className="text-center py-12 bg-white rounded-lg shadow">
-            <div className="text-gray-500 mb-4">
-              {userProfile?.ebay_connection_status === 'connected'
-                ? 'No listings found. Click "Import from eBay" to sync your listings.'
-                : 'Connect your eBay account to import listings.'
-              }
+          <div className="text-center py-12 bg-dark-surface rounded-lg border border-dark-border">
+            <div className="text-text-tertiary">
+              No listings found.
             </div>
-            {userProfile?.ebay_connection_status === 'connected' ? (
-              <button
-                onClick={handleSyncFromEbay}
-                className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700"
-              >
-                Import from eBay
-              </button>
-            ) : (
-              <button
-                onClick={handleConnectEbay}
-                className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700"
-              >
-                Connect eBay Account
-              </button>
-            )}
           </div>
         )}
       </div>
 
       {/* Desktop Table View (visible on large screens) */}
-      <div className="hidden lg:block bg-white rounded-lg shadow overflow-hidden">
+      <div className="hidden lg:block bg-dark-surface rounded-lg border border-dark-border overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full table-fixed divide-y divide-gray-200">
-            <thead className="bg-gray-50">
+          <table className="w-full table-auto divide-y divide-dark-border">
+            <thead className="bg-dark-bg">
               <tr>
                 {columnOrder.map((column) => {
                   if (!visibleColumns[column]) return null
@@ -1478,16 +1357,16 @@ export default function Listings() {
                       onDragOver={handleDragOver}
                       onDrop={(e) => handleDrop(e, column)}
                       onDragEnd={handleDragEnd}
-                      className={`px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider ${
-                        config.sortable ? 'cursor-pointer hover:bg-gray-100' : ''
-                      } ${draggedColumn === column ? 'opacity-50' : ''} ${config.width || ''} select-none`}
+                      className={`px-2 py-3 text-left text-xs font-medium text-text-tertiary uppercase tracking-wider ${
+                        config.sortable ? 'cursor-pointer hover:bg-dark-hover hover:text-text-secondary' : ''
+                      } ${draggedColumn === column ? 'opacity-50' : ''} ${config.width || ''} select-none transition-colors`}
                       onClick={config.sortable ? () => handleSort(config.sortKey) : undefined}
                     >
-                      <div className="flex items-center space-x-1">
-                        <span>⋮⋮</span>
-                        <span>{config.label}</span>
+                      <div className="flex items-center space-x-1 min-w-0">
+                        <span className="flex-shrink-0 text-text-tertiary">⋮⋮</span>
+                        <span className="break-words leading-tight">{config.label}</span>
                         {config.sortable && sortConfig.key === config.sortKey && (
-                          <span>{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
+                          <span className="flex-shrink-0 text-accent">{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
                         )}
                       </div>
                     </th>
@@ -1495,9 +1374,9 @@ export default function Listings() {
                 })}
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
+            <tbody className="bg-dark-surface divide-y divide-dark-border">
               {paginatedListings.map((listing) => (
-                <tr key={listing.id} className="hover:bg-gray-50">
+                <tr key={listing.id} className="hover:bg-dark-hover transition-colors">
                   {columnOrder.map((column) => {
                     if (!visibleColumns[column]) return null
 
@@ -1506,7 +1385,7 @@ export default function Listings() {
                         case 'image':
                           return (
                             <img
-                              src={listing.image_urls?.[0] || '/placeholder-image.jpg'}
+                              src={listing.image_url || '/placeholder-image.jpg'}
                               alt={listing.title}
                               className="w-16 h-16 rounded-lg object-cover"
                             />
@@ -1514,95 +1393,25 @@ export default function Listings() {
                         case 'title':
                           return (
                             <div className="max-w-xs">
-                              <div className="text-sm font-medium text-gray-900 truncate">
+                              <div className="text-sm font-medium text-text-primary truncate">
                                 {listing.title}
                               </div>
-                              {listing.sku && (
-                                <div className="text-xs text-gray-500 mt-1">
-                                  SKU: {listing.sku}
+                              {listing.ebay_sku && (
+                                <div className="text-xs text-text-tertiary mt-1">
+                                  SKU: {listing.ebay_sku}
                                 </div>
                               )}
                             </div>
                           )
                         case 'quantity':
                           return (
-                            <div className="text-sm text-gray-900">
-                              {listing.listing_status === 'Ended' ? 0 : (listing.quantity ?? 0)}
+                            <div className="text-sm text-text-primary">
+                              {listing.listing_status === 'Ended' ? 0 : (listing.quantity_available ?? 0)}
                             </div>
                           )
                         case 'currentPrice':
                           return (
                             <div className="text-sm font-bold text-green-600">${listing.current_price}</div>
-                          )
-                        case 'suggestedPricing':
-                          const hasAnalysis = listing.last_market_analysis !== null
-                          const hasCompetitors = listing.market_competitor_count > 0
-                          const lowDataWarning = hasCompetitors && listing.market_competitor_count < 5
-
-                          return (
-                            <div className="text-xs">
-                              {!hasAnalysis ? (
-                                <span className="text-gray-400 italic">Analyzing...</span>
-                              ) : !hasCompetitors ? (
-                                <span className="text-gray-400 italic">No competitors found</span>
-                              ) : (
-                                <div className="space-y-1">
-                                  {lowDataWarning && (
-                                    <div className="text-orange-600 font-medium mb-1">
-                                      ⚠️ Only {listing.market_competitor_count} found
-                                    </div>
-                                  )}
-
-                                  {/* Average Price */}
-                                  {listing.market_average_price && (
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="text-gray-600">Avg:</span>
-                                      <span className="font-medium text-blue-600">
-                                        ${listing.market_average_price.toFixed(2)}
-                                      </span>
-                                      <button
-                                        onClick={() => handleAcceptSuggestedPrice(listing.id, listing.market_average_price, 'average')}
-                                        disabled={acceptSuggestedPriceMutation.isLoading}
-                                        className="bg-blue-600 text-white px-2 py-0.5 rounded text-xs hover:bg-blue-700 disabled:opacity-50"
-                                        title="Set current price to average"
-                                      >
-                                        Accept
-                                      </button>
-                                    </div>
-                                  )}
-
-                                  {/* Minimum Price */}
-                                  {listing.market_lowest_price && (
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="text-gray-600">Min:</span>
-                                      <span className="font-medium text-green-600">
-                                        ${listing.market_lowest_price.toFixed(2)}
-                                      </span>
-                                      <button
-                                        onClick={() => handleAcceptSuggestedPrice(listing.id, listing.market_lowest_price, 'minimum')}
-                                        disabled={acceptSuggestedPriceMutation.isLoading}
-                                        className="bg-green-600 text-white px-2 py-0.5 rounded text-xs hover:bg-green-700 disabled:opacity-50"
-                                        title="Set minimum price only (doesn't change current listing price)"
-                                      >
-                                        Accept
-                                      </button>
-                                    </div>
-                                  )}
-
-                                  {/* Metadata */}
-                                  <div className="text-gray-400 mt-1">
-                                    {listing.market_competitor_count} comp{listing.market_competitor_count !== 1 ? 's' : ''}
-                                    {listing.price_match_tier && (
-                                      <span className="ml-1">
-                                        ({listing.price_match_tier === 'gtin' ? 'UPC' :
-                                          listing.price_match_tier === 'title_category' ? 'Cat' :
-                                          listing.price_match_tier === 'title_only' ? 'Title' : '?'})
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
                           )
                         case 'minimumPrice':
                           return (
@@ -1612,7 +1421,7 @@ export default function Listings() {
                               min="0"
                               defaultValue={listing.minimum_price || ''}
                               onBlur={(e) => handleMinimumPriceUpdate(listing.id, e.target.value)}
-                              className="w-20 px-2 py-1 text-sm border border-gray-300 rounded"
+                              className="w-20 px-2 py-1 text-sm border border-dark-border rounded-lg bg-dark-bg text-text-primary placeholder-text-tertiary"
                               placeholder="Set min"
                             />
                           )
@@ -1621,33 +1430,33 @@ export default function Listings() {
                             <div className="flex items-center">
                               <label
                                 className={`relative inline-flex items-center ${
-                                  (!listing.minimum_price || listing.minimum_price <= 0) && !listing.price_reduction_enabled
+                                  (!listing.minimum_price || listing.minimum_price <= 0) && !listing.enable_auto_reduction
                                     ? 'cursor-not-allowed'
                                     : 'cursor-pointer'
                                 }`}
-                                title={(!listing.minimum_price || listing.minimum_price <= 0) && !listing.price_reduction_enabled
+                                title={(!listing.minimum_price || listing.minimum_price <= 0) && !listing.enable_auto_reduction
                                   ? 'Set a minimum price before enabling price reduction'
                                   : ''}
                               >
                                 <input
                                   type="checkbox"
-                                  checked={listing.price_reduction_enabled}
+                                  checked={listing.enable_auto_reduction}
                                   onChange={() => handleTogglePriceReduction(listing)}
                                   disabled={togglePriceReductionMutation.isLoading}
                                   className="sr-only"
                                 />
                                 <div className={`relative w-11 h-6 rounded-full transition-colors duration-200 ease-in-out ${
-                                  listing.price_reduction_enabled ? 'bg-blue-600' : 'bg-gray-200'
+                                  listing.enable_auto_reduction ? 'bg-accent' : 'bg-dark-border'
                                 }`}>
                                   <div className={`absolute top-0.5 left-0.5 bg-white w-5 h-5 rounded-full transition-transform duration-200 ease-in-out ${
-                                    listing.price_reduction_enabled ? 'translate-x-5' : 'translate-x-0'
+                                    listing.enable_auto_reduction ? 'translate-x-5' : 'translate-x-0'
                                   }`}></div>
                                 </div>
                               </label>
                               <span className={`ml-2 text-xs ${
-                                listing.price_reduction_enabled ? 'text-green-600 font-medium' : 'text-gray-500'
+                                listing.enable_auto_reduction ? 'text-success font-medium' : 'text-text-tertiary'
                               }`}>
-                                {listing.price_reduction_enabled ? 'Active' : 'Paused'}
+                                {listing.enable_auto_reduction ? 'Active' : 'Paused'}
                               </span>
                             </div>
                           )
@@ -1657,9 +1466,9 @@ export default function Listings() {
                             <select
                               value={listing.strategy_id || listing.reduction_strategy || ''}
                               onChange={(e) => handleStrategyUpdate(listing.id, e.target.value)}
-                              className="text-sm border border-gray-300 rounded px-2 py-1 min-w-40"
+                              className="text-sm border border-dark-border rounded-lg px-2 py-1 min-w-40 bg-dark-bg text-text-primary"
                             >
-                              <option value="">Select Strategy</option>
+                              <option value="">No Strategy</option>
                               {strategies.map((strategy) => (
                                 <option key={strategy.id} value={strategy.id}>
                                   {strategy.name}
@@ -1667,21 +1476,9 @@ export default function Listings() {
                               ))}
                             </select>
                           )
-                        case 'viewCount':
-                          return (
-                            <div className="text-sm text-gray-900 text-center">
-                              {listing.view_count || 0}
-                            </div>
-                          )
-                        case 'watchCount':
-                          return (
-                            <div className="text-sm text-gray-900 text-center">
-                              {listing.watch_count || 0}
-                            </div>
-                          )
                         case 'listingAge':
                           return (
-                            <div className="text-sm text-gray-900">
+                            <div className="text-sm text-text-primary">
                               {calculateListingAge(listing.created_at || new Date())}
                             </div>
                           )
@@ -1689,38 +1486,22 @@ export default function Listings() {
                           return (
                             <div className="flex space-x-1">
                               <a
-                                href={listing.listing_url || `https://www.ebay.com/itm/${listing.ebay_item_id}`}
+                                href={listing.ebay_url || `https://www.ebay.com/itm/${listing.ebay_item_id}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="bg-blue-600 text-white px-2 py-1 rounded text-xs hover:bg-blue-700"
+                                className="bg-accent/10 text-accent border border-accent/30 px-2 py-1 rounded-lg text-xs hover:bg-accent/20 transition-colors"
                                 title="Open this listing on eBay in a new tab"
                               >
                                 View
                               </a>
                               <button
-                                onClick={() => handleReducePrice(listing.id, listing.minimum_price)}
-                                disabled={reducePriceMutation.isLoading || !listing.minimum_price || listing.minimum_price <= 0}
-                                className={`px-2 py-1 rounded text-xs ${
-                                  !listing.minimum_price || listing.minimum_price <= 0
-                                    ? 'bg-gray-400 text-white cursor-not-allowed opacity-50'
-                                    : 'bg-orange-600 text-white hover:bg-orange-700'
-                                } disabled:opacity-50`}
-                                title={!listing.minimum_price || listing.minimum_price <= 0
-                                  ? 'Set a minimum price before reducing prices'
-                                  : 'Reduce price now'}
+                                onClick={() => handleDeleteListing(listing.id)}
+                                disabled={endListingMutation.isLoading}
+                                className="bg-error/10 text-error border border-error/30 px-2 py-1 rounded-lg text-xs hover:bg-error/20 disabled:opacity-50 transition-colors"
+                                title="Close this listing"
                               >
-                                Reduce
+                                Close
                               </button>
-                              {(listing.quantity === 0 || listing.listing_status === 'Ended') && (
-                                <button
-                                  onClick={() => handleDeleteListing(listing.id)}
-                                  disabled={endListingMutation.isLoading}
-                                  className="bg-red-600 text-white px-2 py-1 rounded text-xs hover:bg-red-700 disabled:opacity-50"
-                                  title="Close this listing on eBay"
-                                >
-                                  Close
-                                </button>
-                              )}
                             </div>
                           )
                         default:
@@ -1732,7 +1513,7 @@ export default function Listings() {
                     return (
                       <td
                         key={column}
-                        className={`px-4 py-3 ${column === 'actions' ? 'whitespace-nowrap text-sm font-medium' : 'whitespace-nowrap'} ${config.width || ''}`}
+                        className={`px-2 py-3 ${column === 'actions' ? 'whitespace-nowrap text-sm font-medium' : 'whitespace-nowrap'} ${config.width || ''}`}
                       >
                         {renderCell()}
                       </td>
@@ -1746,27 +1527,9 @@ export default function Listings() {
 
         {(!listings || listings.length === 0) && (
           <div className="text-center py-12">
-            <div className="text-gray-500 mb-4">
-              {userProfile?.ebay_connection_status === 'connected'
-                ? 'No listings found. Click "Import from eBay" to sync your listings.'
-                : 'Connect your eBay account to import listings.'
-              }
+            <div className="text-gray-500">
+              No listings found.
             </div>
-            {userProfile?.ebay_connection_status === 'connected' ? (
-              <button
-                onClick={handleSyncFromEbay}
-                className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700"
-              >
-                Import from eBay
-              </button>
-            ) : (
-              <button
-                onClick={handleConnectEbay}
-                className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700"
-              >
-                Connect eBay Account
-              </button>
-            )}
           </div>
         )}
 
