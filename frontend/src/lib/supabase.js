@@ -912,7 +912,8 @@ const realAuthAPI = realSupabaseClient ? {
       email: email,
       password: password,
       options: {
-        data: userData
+        data: userData,
+        emailRedirectTo: window.location.origin
       }
     })
   },
