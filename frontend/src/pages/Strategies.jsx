@@ -74,11 +74,13 @@ export default function Strategies() {
       return
     }
 
+    // Map frontend field names to database column names
     createStrategyMutation.mutate({
       name: newRule.name,
-      reduction_type: newRule.reduction_type,
-      reduction_amount: newRule.reduction_amount,
-      frequency_days: newRule.frequency_days,
+      strategy_type: newRule.reduction_type,  // DB uses strategy_type
+      reduction_percentage: newRule.reduction_type === 'percentage' ? newRule.reduction_amount : 0,
+      reduction_amount: newRule.reduction_type === 'dollar' ? newRule.reduction_amount : 0,
+      interval_days: newRule.frequency_days,  // DB uses interval_days
       is_active: true
     })
 
@@ -92,7 +94,15 @@ export default function Strategies() {
   }
 
   const handleUpdateRule = (id, updates) => {
-    updateStrategyMutation.mutate({ id, updates })
+    // Map frontend field names to database column names
+    const dbUpdates = {
+      name: updates.name,
+      strategy_type: updates.reduction_type,  // DB uses strategy_type
+      reduction_percentage: updates.reduction_type === 'percentage' ? updates.reduction_amount : 0,
+      reduction_amount: updates.reduction_type === 'dollar' ? updates.reduction_amount : 0,
+      interval_days: updates.frequency_days  // DB uses interval_days
+    }
+    updateStrategyMutation.mutate({ id, updates: dbUpdates })
     setEditingRule(null)
   }
 
