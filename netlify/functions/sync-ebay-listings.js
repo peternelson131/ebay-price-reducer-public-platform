@@ -81,13 +81,18 @@ function parseGetMyeBaySellingResponse(xmlText) {
     const itemXml = match[1];
     
     const getValue = (tag) => {
-      const regex = new RegExp(`<${tag}>([^<]*)</${tag}>`);
+      // Handle tags with attributes like <CurrentPrice currencyID="USD">29.99</CurrentPrice>
+      const regex = new RegExp(`<${tag}[^>]*>([^<]*)</${tag}>`);
       const m = itemXml.match(regex);
       return m ? m[1] : null;
     };
     
     // Parse price - must be > 0 for DB constraint
+    // Try multiple price fields - eBay uses different ones depending on listing type
     let price = parseFloat(getValue('CurrentPrice')) || 0;
+    if (price <= 0) {
+      price = parseFloat(getValue('ConvertedCurrentPrice')) || 0;
+    }
     if (price <= 0) {
       price = parseFloat(getValue('BuyItNowPrice')) || parseFloat(getValue('StartPrice')) || 0.01;
     }
