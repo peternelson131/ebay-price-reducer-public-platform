@@ -5,10 +5,9 @@
  * Handles both Trading API (XML) and Inventory API (REST) listings.
  * 
  * CRITICAL RULES:
- * - NEVER overwrite current_price (we control reductions)
- * - NEVER overwrite minimum_price, strategy_id, enable_auto_reduction
- * - ALWAYS update: title, quantity, status, images
- * - Set prices ONLY on first import (new listings)
+ * - ALWAYS sync current_price from eBay (source of truth for live prices)
+ * - NEVER overwrite minimum_price, strategy_id, enable_auto_reduction (user settings)
+ * - ALWAYS update: title, quantity, status, images, current_price
  */
 
 const { createClient } = require('@supabase/supabase-js');
@@ -348,11 +347,6 @@ async function upsertListings(userId, listings) {
       
       if (existing) {
         toUpdate.push({ listing, existing });
-        
-        // Log price discrepancy
-        if (Math.abs(existing.current_price - listing.current_price) > 0.01) {
-          console.warn(`💰 Price mismatch for ${listing.ebay_item_id || listing.ebay_sku}: DB=$${existing.current_price}, eBay=$${listing.current_price}`);
-        }
       } else {
         toInsert.push(listing);
       }
@@ -425,10 +419,16 @@ async function upsertListings(userId, listings) {
     // But we can parallelize with Promise.all
     const updatePromises = toUpdate.map(async ({ listing, existing }) => {
       try {
+        // Log price changes
+        if (Math.abs(existing.current_price - listing.current_price) > 0.01) {
+          console.log(`💰 Price update for ${listing.ebay_item_id || listing.ebay_sku}: $${existing.current_price} → $${listing.current_price}`);
+        }
+        
         const { error } = await supabase
           .from('listings')
           .update({
             title: listing.title,
+            current_price: listing.current_price,  // Always sync from eBay
             quantity_available: listing.quantity_available,
             quantity_sold: listing.quantity_sold,
             listing_status: deriveStatus(listing),
